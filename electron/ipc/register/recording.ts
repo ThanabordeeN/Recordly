@@ -1702,6 +1702,16 @@ export function registerRecordingHandlers(
 			return { success: false, message: "No Wayland capture was running" };
 		}
 
+		// The browser path gets this for free through finalizeStoredVideo(); this
+		// one has to write the sidecar itself, or the editor finds no telemetry
+		// and draws no cursor at all.
+		snapshotCursorTelemetryForPersistence();
+		try {
+			await persistPendingCursorTelemetry(result.outputPath);
+		} catch (error) {
+			console.warn("Failed to persist cursor telemetry for the Wayland capture:", error);
+		}
+
 		try {
 			await validateRecordedVideo(result.outputPath);
 		} catch (error) {

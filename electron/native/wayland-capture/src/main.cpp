@@ -361,7 +361,14 @@ int main(int argc, char **argv) {
 		"!",
 		"videoconvert",
 		"!",
-		"video/x-raw,format=I420",
+		// A screen only produces frames when something changes, so the raw
+		// stream is variable rate. Y4M carries no timestamps, which would make
+		// the finished video shorter than the recording by however long the
+		// screen sat still. videorate repeats the last frame to a constant rate
+		// so the duration matches wall clock.
+		"videorate",
+		"!",
+		"video/x-raw,format=I420,framerate=" + std::to_string(frameRate) + "/1",
 		"!",
 		"y4menc",
 		"!",

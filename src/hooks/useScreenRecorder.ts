@@ -1783,6 +1783,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							waylandCaptureRecording.current = true;
 							setRecording(true);
 							resetRecordingClock(Date.now());
+							// The webcam is a separate MediaRecorder that the
+							// browser path starts for itself; this path has to
+							// start it too or the companion video is never made.
+							beginWebcamCapture();
 							await window.electronAPI.setRecordingState(true);
 							return;
 						}
