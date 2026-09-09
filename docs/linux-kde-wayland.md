@@ -336,6 +336,30 @@ and exits with code 7 and an actionable message if either is missing, so a
 machine without them falls back to the existing browser capture instead of
 failing mysteriously after the user has picked a screen.
 
+### Two mistakes worth not repeating
+
+Both were found the hard way and both produced a recording of *something else*
+rather than an obvious failure:
+
+- **The portal session dies with the D-Bus connection.** Closing the connection
+  after negotiating tears the session down, and the PipeWire node is gone before
+  a frame arrives. The connection is held open for the whole recording and
+  polled alongside stdin.
+- **The node id only means something on the portal's own remote.** Connecting to
+  the session daemon and reusing the number there resolves to an unrelated node
+  -- in testing it landed on this process's own client object, and the resulting
+  file was not the screen at all. `pipewiresrc` is always given the portal's
+  descriptor (`fd=`), and the daemon route has been removed rather than left as
+  a fallback.
+
+A related trap: `dup2(fd, fd)` is a no-op that does **not** clear `FD_CLOEXEC`,
+so a descriptor that already happens to sit at the target number silently
+disappears at `exec`. The flag is cleared explicitly.
+
+A capture that looks plausible is not evidence. Check the stream size against
+the monitor's real pixel size, and crop the frame at the position the cursor
+helper reports -- at full resolution, since a cursor is only about 24 px wide.
+
 ### Safety: the source is always checked
 
 A portal restore token replays whatever the previous session selected. In
@@ -345,15 +369,22 @@ main process therefore verify `source_type == MONITOR` and refuse to record
 anything else, and restore tokens are **off by default** -- the picker costs one
 click and is what Recordly already does today.
 
-### Not wired into recording yet
+### Audio
 
-The helper, its protocol, and the main-process lifecycle are complete and
-tested, but Recordly still records through the browser path. Finishing the
-integration means following the existing native-capture pattern
-(`windows-wgc` / `mac-screencapturekit`): video from this helper, audio from the
-renderer, then muxed together, plus pause/resume and diagnostics. The bundled
-ffmpeg has no PulseAudio input, so audio has to come from the renderer exactly
-as it does on Windows.
+System audio and the microphone are captured in the same GStreamer process via
+`pulsesrc` (PipeWire's PulseAudio compatibility), carried as WAV -- self
+describing like Y4M -- and muxed into the mp4 by the same ffmpeg pass. With both
+enabled they are mixed into one track. Pass the source names with
+`--system-audio` (normally `<default sink>.monitor`) and `--microphone`.
+
+### Not wired into the recording UI yet
+
+The helper, its protocol, the main-process lifecycle and the IPC surface are
+complete and tested, but `useScreenRecorder.ts` still always takes the browser
+path. The remaining step is a branch alongside the existing
+`useNativeMacScreenCapture` / `useNativeWindowsCapture` ones that calls
+`evaluateWaylandCapture()` and, when it says yes, `startWaylandCapture()` /
+`stopWaylandCapture()` instead of `getDisplayMedia`.
 
 ## Follow-up work for generic Wayland
 

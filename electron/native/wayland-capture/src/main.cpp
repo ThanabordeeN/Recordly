@@ -84,9 +84,15 @@ void emitError(const std::string &message) {
 	         "\",\"timestamp\":" + std::to_string(nowMs()) + "}");
 }
 
-/** Spawns a child with the given stdin/stdout, plus one extra inherited fd. */
+/** One descriptor to hand to a child under a fixed number. */
+struct InheritedFd {
+	int from = -1;
+	int as = -1;
+};
+
+/** Spawns a child with the given stdin/stdout plus any extra inherited fds. */
 pid_t spawnChild(const std::vector<std::string> &argv, int stdinFd, int stdoutFd,
-                 int inheritFd, int inheritAs) {
+                 const std::vector<InheritedFd> &inherited = {}) {
 	std::vector<char *> raw;
 	raw.reserve(argv.size() + 1);
 	for (const std::string &argument : argv) {
@@ -111,9 +117,17 @@ pid_t spawnChild(const std::vector<std::string> &argv, int stdinFd, int stdoutFd
 			dup2(devNull, STDOUT_FILENO);
 		}
 	}
-	if (inheritFd >= 0 && inheritAs >= 0) {
-		// dup2 clears FD_CLOEXEC, which is exactly what the child needs.
-		dup2(inheritFd, inheritAs);
+	for (const InheritedFd &entry : inherited) {
+		if (entry.from < 0 || entry.as < 0) {
+			continue;
+		}
+		if (entry.from != entry.as) {
+			dup2(entry.from, entry.as);
+		}
+		// dup2 clears FD_CLOEXEC on the copy, but dup2(fd, fd) is a no-op that
+		// leaves the flag alone -- the descriptor would then vanish at exec and
+		// the child would silently receive nothing. Clear it explicitly.
+		fcntl(entry.as, F_SETFD, 0);
 	}
 
 	// If the helper is killed outright, the encoder must not linger holding the
@@ -158,7 +172,7 @@ bool waitForExit(pid_t pid, int timeoutMs, int *exitCode) {
  */
 bool probeFrameSource(const std::string &gstPath, std::string *problem) {
 	const std::vector<std::string> args = {gstPath, "--version"};
-	const pid_t pid = spawnChild(args, -1, -1, -1, -1);
+	const pid_t pid = spawnChild(args, -1, -1);
 	if (pid < 0) {
 		*problem = "cannot execute " + gstPath;
 		return false;
@@ -180,7 +194,7 @@ bool probeFrameSource(const std::string &gstPath, std::string *problem) {
 
 	// gst-launch exists; make sure the PipeWire element is actually registered.
 	const std::vector<std::string> inspect = {"gst-inspect-1.0", "pipewiresrc"};
-	const pid_t inspectPid = spawnChild(inspect, -1, -1, -1, -1);
+	const pid_t inspectPid = spawnChild(inspect, -1, -1);
 	if (inspectPid < 0) {
 		return true;  // cannot check; let the pipeline speak for itself
 	}
@@ -207,6 +221,9 @@ int main(int argc, char **argv) {
 	PortalCursorMode cursorMode = PortalCursorMode::Hidden;
 	int frameRate = 60;
 	bool usePortalFd = false;
+	std::string systemAudioDevice;
+	std::string microphoneDevice;
+	(void)usePortalFd;
 
 	for (int i = 1; i < argc; i++) {
 		const std::string flag = argv[i];
@@ -225,7 +242,13 @@ int main(int argc, char **argv) {
 			ffmpegPath = argv[++i];
 		} else if (flag == "--gst-launch" && hasValue) {
 			gstPath = argv[++i];
+		} else if (flag == "--system-audio" && hasValue) {
+			// A PulseAudio/PipeWire source name, normally "<default sink>.monitor".
+			systemAudioDevice = argv[++i];
+		} else if (flag == "--microphone" && hasValue) {
+			microphoneDevice = argv[++i];
 		} else if (flag == "--portal-fd") {
+			// Kept only so older callers do not fail; this is now the only route.
 			usePortalFd = true;
 		} else if (flag == "--fps" && hasValue) {
 			frameRate = atoi(argv[++i]);
@@ -303,19 +326,38 @@ int main(int argc, char **argv) {
 		return 3;
 	}
 
+	// Audio rides alongside the video in the same GStreamer process, each track
+	// on its own descriptor, so ffmpeg can mux everything in one pass. WAV is
+	// used as the transport because it is self-describing like Y4M.
+	constexpr int kSystemAudioChildFd = 4;
+	constexpr int kMicrophoneChildFd = 5;
+
+	int systemAudioPipe[2] = {-1, -1};
+	int microphonePipe[2] = {-1, -1};
+	if (!systemAudioDevice.empty() && pipe2(systemAudioPipe, O_CLOEXEC) != 0) {
+		emitError(std::string("cannot create the system audio pipe: ") + strerror(errno));
+		portalCloseScreenCast(&session);
+		return 3;
+	}
+	if (!microphoneDevice.empty() && pipe2(microphonePipe, O_CLOEXEC) != 0) {
+		emitError(std::string("cannot create the microphone pipe: ") + strerror(errno));
+		portalCloseScreenCast(&session);
+		return 3;
+	}
+
 	// gst-launch treats every argv entry as one pipeline token, so each
 	// property has to be its own argument exactly as a shell would split it.
-	const std::vector<std::string> gstArgs = {
+	std::vector<std::string> gstArgs = {
 		gstPath,
-		usePortalFd ? "-q" : "-q",
+		"-q",
 		"pipewiresrc",
-		// Handing over the portal's own remote is the strict reading of the
-		// spec, but pipewiresrc can also reach the node through the session
-		// daemon; --frame-source picks between them so a compositor that
-		// rejects one still records.
-		usePortalFd ? ("fd=" + std::to_string(kPipeWireChildFd))
-		            : ("path=" + std::to_string(session.nodeId)),
-		usePortalFd ? ("path=" + std::to_string(session.nodeId)) : "do-timestamp=true",
+		// The node id is only meaningful on the remote the portal opened for
+		// us. Connecting to the session daemon instead and reusing the number
+		// there resolves to an unrelated node -- in testing it landed on this
+		// process's own client object, and could just as easily be a camera.
+		"fd=" + std::to_string(kPipeWireChildFd),
+		"path=" + std::to_string(session.nodeId),
+		"do-timestamp=true",
 		"!",
 		"videoconvert",
 		"!",
@@ -327,20 +369,121 @@ int main(int argc, char **argv) {
 		"fd=1",
 	};
 
-	const std::vector<std::string> ffmpegArgs = {
-		ffmpegPath, "-hide_banner", "-loglevel", "error",
-		"-f", "yuv4mpegpipe", "-i", "-",
-		"-r", std::to_string(frameRate),
-		"-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-		"-movflags", "+faststart", "-y", outputPath,
+	const auto appendAudioBranch = [&gstArgs](const std::string &device, int childFd) {
+		for (const std::string &token : {
+				 std::string("pulsesrc"),
+				 "device=" + device,
+				 std::string("provide-clock=false"),
+				 std::string("!"),
+				 std::string("queue"),
+				 std::string("!"),
+				 std::string("audioconvert"),
+				 std::string("!"),
+				 std::string("audioresample"),
+				 std::string("!"),
+				 std::string("audio/x-raw,format=S16LE,rate=48000,channels=2"),
+				 std::string("!"),
+				 std::string("wavenc"),
+				 std::string("!"),
+				 std::string("fdsink"),
+				 "fd=" + std::to_string(childFd),
+			 }) {
+			gstArgs.push_back(token);
+		}
 	};
 
-	const pid_t gstPid = spawnChild(gstArgs, -1, frames[1],
-	                                usePortalFd ? session.pipewireFd : -1,
-	                                usePortalFd ? kPipeWireChildFd : -1);
-	const pid_t ffmpegPid = spawnChild(ffmpegArgs, frames[0], -1, -1, -1);
-	close(frames[0]);
-	close(frames[1]);
+	if (!systemAudioDevice.empty()) {
+		appendAudioBranch(systemAudioDevice, kSystemAudioChildFd);
+	}
+	if (!microphoneDevice.empty()) {
+		appendAudioBranch(microphoneDevice, kMicrophoneChildFd);
+	}
+
+	std::vector<std::string> ffmpegArgs = {
+		ffmpegPath, "-hide_banner", "-loglevel", "error",
+		"-f",       "yuv4mpegpipe", "-i",        "pipe:0",
+	};
+
+	int audioInputs = 0;
+	if (!systemAudioDevice.empty()) {
+		ffmpegArgs.push_back("-f");
+		ffmpegArgs.push_back("wav");
+		ffmpegArgs.push_back("-i");
+		ffmpegArgs.push_back("pipe:" + std::to_string(kSystemAudioChildFd));
+		audioInputs++;
+	}
+	if (!microphoneDevice.empty()) {
+		ffmpegArgs.push_back("-f");
+		ffmpegArgs.push_back("wav");
+		ffmpegArgs.push_back("-i");
+		ffmpegArgs.push_back("pipe:" + std::to_string(kMicrophoneChildFd));
+		audioInputs++;
+	}
+
+	ffmpegArgs.push_back("-r");
+	ffmpegArgs.push_back(std::to_string(frameRate));
+
+	if (audioInputs == 2) {
+		// System audio and microphone become one track; keeping them separate
+		// would need a second output file and a muxing step downstream.
+		ffmpegArgs.push_back("-filter_complex");
+		ffmpegArgs.push_back("[1:a][2:a]amix=inputs=2:normalize=0[aout]");
+		ffmpegArgs.push_back("-map");
+		ffmpegArgs.push_back("0:v");
+		ffmpegArgs.push_back("-map");
+		ffmpegArgs.push_back("[aout]");
+	} else if (audioInputs == 1) {
+		ffmpegArgs.push_back("-map");
+		ffmpegArgs.push_back("0:v");
+		ffmpegArgs.push_back("-map");
+		ffmpegArgs.push_back("1:a");
+	}
+
+	if (audioInputs > 0) {
+		ffmpegArgs.push_back("-c:a");
+		ffmpegArgs.push_back("aac");
+		ffmpegArgs.push_back("-b:a");
+		ffmpegArgs.push_back("192k");
+		// The screen stream drives the length; audio that outlives it would
+		// leave a tail of frozen video.
+		ffmpegArgs.push_back("-shortest");
+	}
+
+	for (const std::string &token : {
+			 std::string("-c:v"), std::string("libx264"), std::string("-preset"),
+			 std::string("veryfast"), std::string("-pix_fmt"), std::string("yuv420p"),
+			 std::string("-movflags"), std::string("+faststart"), std::string("-y"),
+			 outputPath,
+		 }) {
+		ffmpegArgs.push_back(token);
+	}
+
+	std::vector<InheritedFd> gstFds;
+	gstFds.push_back({session.pipewireFd, kPipeWireChildFd});
+	if (systemAudioPipe[1] >= 0) {
+		gstFds.push_back({systemAudioPipe[1], kSystemAudioChildFd});
+	}
+	if (microphonePipe[1] >= 0) {
+		gstFds.push_back({microphonePipe[1], kMicrophoneChildFd});
+	}
+
+	std::vector<InheritedFd> ffmpegFds;
+	if (systemAudioPipe[0] >= 0) {
+		ffmpegFds.push_back({systemAudioPipe[0], kSystemAudioChildFd});
+	}
+	if (microphonePipe[0] >= 0) {
+		ffmpegFds.push_back({microphonePipe[0], kMicrophoneChildFd});
+	}
+
+	const pid_t gstPid = spawnChild(gstArgs, -1, frames[1], gstFds);
+	const pid_t ffmpegPid = spawnChild(ffmpegArgs, frames[0], -1, ffmpegFds);
+	// The parent must not keep any pipe end open, or neither child ever sees EOF.
+	for (int fd : {frames[0], frames[1], systemAudioPipe[0], systemAudioPipe[1],
+	               microphonePipe[0], microphonePipe[1]}) {
+		if (fd >= 0) {
+			close(fd);
+		}
+	}
 
 	if (gstPid < 0 || ffmpegPid < 0) {
 		emitError("cannot start the capture pipeline");
@@ -364,15 +507,23 @@ int main(int argc, char **argv) {
 	}
 
 	// Wait for "stop" on stdin, a signal, or either child dying on its own.
+	// The portal connection is polled alongside stdin: it has to stay serviced
+	// for the whole recording, because the session dies with it.
 	while (!g_stopRequested) {
-		struct pollfd stdinPoll = {};
-		stdinPoll.fd = STDIN_FILENO;
-		stdinPoll.events = POLLIN;
+		struct pollfd fds[2] = {};
+		fds[0].fd = STDIN_FILENO;
+		fds[0].events = POLLIN;
+		fds[1].fd = portalBusFd(&session);
+		fds[1].events = fds[1].fd >= 0 ? POLLIN : 0;
 
-		const int ready = poll(&stdinPoll, 1, 200);
+		const int ready = poll(fds, 2, 200);
 		if (ready < 0 && errno != EINTR) {
 			break;
 		}
+
+		portalPumpScreenCast(&session);
+
+		const struct pollfd &stdinPoll = fds[0];
 		if (ready > 0 && (stdinPoll.revents & (POLLIN | POLLHUP | POLLERR))) {
 			char buffer[128];
 			const ssize_t bytes = read(STDIN_FILENO, buffer, sizeof(buffer));

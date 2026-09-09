@@ -365,12 +365,32 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 	out->width = startState.width;
 	out->height = startState.height;
 	out->restoreToken = startState.restoreToken;
+	// Hold the connection: closing it here would make the portal destroy the
+	// session immediately and the PipeWire node would be gone before the
+	// pipeline ever attached to it.
+	out->bus = bus;
 	out->valid = true;
-
-	// The session outlives this bus connection: the portal keeps it open until
-	// Session.Close, and the PipeWire node stays valid meanwhile.
-	sd_bus_flush_close_unref(bus);
 	return true;
+}
+
+void portalPumpScreenCast(PortalSession *session) {
+	if (!session || !session->valid || !session->bus) {
+		return;
+	}
+
+	auto *bus = static_cast<sd_bus *>(session->bus);
+	// Drain whatever the portal sent (Session::Closed, mostly) so the
+	// connection stays healthy for as long as the capture runs.
+	while (sd_bus_process(bus, nullptr) > 0) {
+	}
+}
+
+int portalBusFd(const PortalSession *session) {
+	if (!session || !session->valid || !session->bus) {
+		return -1;
+	}
+
+	return sd_bus_get_fd(static_cast<sd_bus *>(session->bus));
 }
 
 void portalCloseScreenCast(PortalSession *session) {
@@ -378,11 +398,12 @@ void portalCloseScreenCast(PortalSession *session) {
 		return;
 	}
 
-	sd_bus *bus = nullptr;
-	if (sd_bus_open_user(&bus) >= 0) {
+	if (session->bus) {
+		auto *bus = static_cast<sd_bus *>(session->bus);
 		sd_bus_call_method(bus, kPortalBus, session->sessionHandle.c_str(), kSessionIface, "Close",
 		                   nullptr, nullptr, nullptr);
 		sd_bus_flush_close_unref(bus);
+		session->bus = nullptr;
 	}
 
 	if (session->pipewireFd >= 0) {

@@ -35,6 +35,15 @@ struct PortalSession {
 	unsigned width = 0;
 	unsigned height = 0;
 	std::string restoreToken;
+	/**
+	 * The bus connection that owns the session.
+	 *
+	 * xdg-desktop-portal ties a session's lifetime to the client's D-Bus
+	 * connection: drop the connection and the portal tears the session down,
+	 * taking the PipeWire node with it before a single frame arrives. So the
+	 * connection is held here until portalCloseScreenCast().
+	 */
+	void *bus = nullptr;
 	bool valid = false;
 };
 
@@ -64,3 +73,9 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 
 /** Closes the session so the compositor stops streaming. */
 void portalCloseScreenCast(PortalSession *session);
+
+/** Services the held connection; call it regularly while capturing. */
+void portalPumpScreenCast(PortalSession *session);
+
+/** Descriptor to poll so the connection is serviced only when it has traffic. */
+int portalBusFd(const PortalSession *session);
