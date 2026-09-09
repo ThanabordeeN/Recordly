@@ -565,10 +565,6 @@ int main(int argc, char **argv) {
 	// every branch has prerolled, and a suspended PulseAudio monitor took about
 	// ten seconds to wake -- ten seconds in which the screen recorded nothing.
 	const pid_t gstPid = spawnChild(gstArgs, -1, frames[1], gstFds);
-	pid_t audioPid = -1;
-	if (audioArgs.size() > 2) {
-		audioPid = spawnChild(audioArgs, -1, -1, gstAudioFds);
-	}
 	const pid_t ffmpegPid = spawnChild(ffmpegArgs, frames[0], -1, ffmpegFds);
 	// The parent must not keep any pipe end open, or neither child ever sees EOF.
 	for (int fd : {frames[0], frames[1], systemAudioPipe[0], systemAudioPipe[1],
@@ -588,9 +584,17 @@ int main(int argc, char **argv) {
 	// took about six seconds to start flowing here. Announcing "recording" then
 	// would start Recordly's clock and the webcam on an empty screen, leaving
 	// the finished video that much shorter than the timer said.
+	// ffmpeg writes the mp4 header, in more than one go, the moment it opens the
+	// output -- so neither "the file exists" nor "the file grew" means a frame
+	// has arrived. A single 2880x1800 keyframe is hundreds of kilobytes, so
+	// crossing this threshold cannot happen on headers alone.
+	// ponytail: size threshold, swap for a real signal if the helper ever reads
+	// the stream itself.
+	constexpr off_t kEncodedDataBytes = 256 * 1024;
 	for (int waited = 0; waited < 20000; waited += 100) {
 		struct stat outputStat = {};
-		if (stat(outputPath.c_str(), &outputStat) == 0 && outputStat.st_size > 0) {
+		if (stat(outputPath.c_str(), &outputStat) == 0 &&
+		    outputStat.st_size >= kEncodedDataBytes) {
 			break;
 		}
 		int status = 0;
@@ -601,6 +605,13 @@ int main(int argc, char **argv) {
 		}
 		struct timespec pollDelay = {0, 100 * 1000 * 1000L};
 		nanosleep(&pollDelay, nullptr);
+	}
+
+	// Only now, with the screen actually recording: audio started alongside the
+	// pipeline would run ahead of the video by the whole startup delay.
+	pid_t audioPid = -1;
+	if (audioArgs.size() > 2) {
+		audioPid = spawnChild(audioArgs, -1, -1, gstAudioFds);
 	}
 
 	{
