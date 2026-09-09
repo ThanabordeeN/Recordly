@@ -534,6 +534,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	resumeCursorCapture: (resumedAtMs?: number) => {
 		return ipcRenderer.invoke("resume-cursor-capture", resumedAtMs);
 	},
+	// Cursor-free Wayland capture. evaluate first: it reports why the browser
+	// path is still being used when this one does not apply.
+	evaluateWaylandCapture: (request: {
+		enabled?: boolean;
+		capturesSystemAudio?: boolean;
+		capturesMicrophone?: boolean;
+		sourceId?: string | null;
+	}) => {
+		return ipcRenderer.invoke("evaluate-wayland-capture", request);
+	},
+	startWaylandCapture: (request: { fileName?: string; frameRate?: number }) => {
+		return ipcRenderer.invoke("start-wayland-capture", request);
+	},
+	stopWaylandCapture: () => {
+		return ipcRenderer.invoke("stop-wayland-capture");
+	},
 	startFfmpegRecording: (source: ProcessedDesktopSource) => {
 		return ipcRenderer.invoke("start-ffmpeg-recording", source);
 	},

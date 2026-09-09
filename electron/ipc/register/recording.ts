@@ -48,6 +48,7 @@ import {
 	getSystemCursorHelperBinaryPath,
 	getSystemCursorHelperSourcePath,
 	getWindowsCaptureExePath,
+	isWaylandCaptureHelperAvailable,
 } from "../paths/binaries";
 import { rememberApprovedLocalReadPath } from "../project/manager";
 import {
@@ -80,6 +81,8 @@ import {
 	waitForNativeCaptureStop,
 } from "../recording/mac";
 import { resolveRecordedVideoStoragePath } from "../recording/storagePath";
+import { startWaylandCapture, stopWaylandCapture } from "../recording/waylandCapture";
+import { decideWaylandCapture } from "../recording/waylandCapturePolicy";
 import {
 	attachWindowsCaptureLifecycle,
 	isNativeWindowsCaptureAvailable,
@@ -95,6 +98,7 @@ import {
 	cachedSystemCursorAssets,
 	cachedSystemCursorAssetsSourceMtimeMs,
 	currentVideoPath,
+	cursorBackend,
 	ffmpegCaptureOutputBuffer,
 	ffmpegCaptureProcess,
 	ffmpegCaptureTargetPath,
@@ -111,6 +115,7 @@ import {
 	setActiveCursorSamples,
 	setCachedSystemCursorAssets,
 	setCachedSystemCursorAssetsSourceMtimeMs,
+	setCurrentVideoPath,
 	setCursorCaptureStartTimeMs,
 	setFfmpegCaptureOutputBuffer,
 	setFfmpegCaptureProcess,
@@ -1569,6 +1574,85 @@ export function registerRecordingHandlers(
 				`[PERF:MAIN] Handler: mux-native-windows-recording: COMPLETED in ${Date.now() - start}ms`,
 			);
 		}
+	});
+
+	// ── Cursor-free Wayland capture ──────────────────────────────────────────
+	// Opt-in, video only, and it never replaces the browser path on its own:
+	// decideWaylandCapture() says whether this recording qualifies and why not
+	// when it does not, so the caller can fall back with a reason to show.
+	ipcMain.handle(
+		"evaluate-wayland-capture",
+		(
+			_,
+			request: {
+				enabled?: boolean;
+				capturesSystemAudio?: boolean;
+				capturesMicrophone?: boolean;
+				sourceId?: string | null;
+			} = {},
+		) => {
+			return decideWaylandCapture({
+				cursorBackend,
+				enabled: request.enabled === true,
+				isHelperAvailable: isWaylandCaptureHelperAvailable(),
+				capturesSystemAudio: request.capturesSystemAudio === true,
+				capturesMicrophone: request.capturesMicrophone === true,
+				sourceId: request.sourceId ?? null,
+			});
+		},
+	);
+
+	ipcMain.handle(
+		"start-wayland-capture",
+		async (_, request: { fileName?: string; frameRate?: number } = {}) => {
+			try {
+				const recordingsDir = await getRecordingsDir();
+				const outputPath = resolveRecordedVideoStoragePath(
+					recordingsDir,
+					request.fileName ?? `recording-${Date.now()}.mp4`,
+				);
+
+				const result = await startWaylandCapture({
+					outputPath,
+					cursorMode: "hidden",
+					frameRate: request.frameRate ?? 60,
+				});
+
+				if (!result.success) {
+					return {
+						success: false,
+						message: result.message,
+						cancelled: result.cancelled === true,
+					};
+				}
+
+				setCurrentVideoPath(result.outputPath);
+				return { success: true, path: result.outputPath };
+			} catch (error) {
+				console.error("Failed to start Wayland capture:", error);
+				return { success: false, message: String(error) };
+			}
+		},
+	);
+
+	ipcMain.handle("stop-wayland-capture", async () => {
+		const result = await stopWaylandCapture();
+		if (!result.outputPath) {
+			return { success: false, message: "No Wayland capture was running" };
+		}
+
+		try {
+			await validateRecordedVideo(result.outputPath);
+		} catch (error) {
+			return {
+				success: false,
+				path: result.outputPath,
+				message: "The Wayland capture produced an unusable file",
+				error: String(error),
+			};
+		}
+
+		return { success: true, path: result.outputPath };
 	});
 
 	ipcMain.handle("start-ffmpeg-recording", async (_, source: SelectedSource) => {

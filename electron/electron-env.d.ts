@@ -840,6 +840,24 @@ interface Window {
 		onMenuSaveProjectAs: (callback: () => void) => () => void;
 		getPlatform: () => Promise<string>;
 		getLinuxWindowSystem: () => Promise<"wayland" | "x11" | null>;
+		evaluateWaylandCapture: (request: {
+			enabled?: boolean;
+			capturesSystemAudio?: boolean;
+			capturesMicrophone?: boolean;
+			sourceId?: string | null;
+		}) => Promise<{ use: true } | { use: false; reason: string; message: string }>;
+		startWaylandCapture: (request: { fileName?: string; frameRate?: number }) => Promise<{
+			success: boolean;
+			path?: string;
+			message?: string;
+			cancelled?: boolean;
+		}>;
+		stopWaylandCapture: () => Promise<{
+			success: boolean;
+			path?: string;
+			message?: string;
+			error?: string;
+		}>;
 		revealInFolder: (
 			filePath: string,
 		) => Promise<{ success: boolean; error?: string; message?: string }>;
