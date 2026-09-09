@@ -121,6 +121,48 @@ export function getWindowsCaptureExePath(): string {
 	return resolvePreferredWindowsNativeHelperPath("wgc-capture", "wgc-capture.exe");
 }
 
+export function getWaylandCursorHelperCandidatePaths(): string[] {
+	return [
+		getPrebundledNativeHelperPath("recordly-wayland-cursor", getNativeArchTag("linux")),
+		// Source checkouts run the binary produced by scripts/build-wayland-cursor.mjs.
+		resolveUnpackedAppPath(
+			"electron",
+			"native",
+			"wayland-cursor",
+			"build",
+			"recordly-wayland-cursor",
+		),
+	];
+}
+
+export function getWaylandCursorHelperPath(): string | null {
+	for (const candidate of getWaylandCursorHelperCandidatePaths()) {
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	return null;
+}
+
+/**
+ * The KWin bridge script has to be a real file on disk: KWin reads it by path
+ * over D-Bus, so it must live outside the asar archive (see asarUnpack).
+ */
+export function getWaylandCursorKWinScriptPath(): string {
+	return resolveUnpackedAppPath(
+		"electron",
+		"native",
+		"wayland-cursor",
+		"kwin",
+		"recordly-cursor-bridge.js",
+	);
+}
+
+export function isWaylandCursorHelperAvailable(): boolean {
+	return getWaylandCursorHelperPath() !== null && existsSync(getWaylandCursorKWinScriptPath());
+}
+
 export function getCursorMonitorExePath(): string {
 	return resolvePreferredWindowsNativeHelperPath("cursor-monitor", "cursor-monitor.exe");
 }

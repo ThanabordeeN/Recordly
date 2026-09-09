@@ -34,6 +34,11 @@ import {
 	stopCursorCapture,
 	writeCursorTelemetry,
 } from "../cursor/telemetry";
+import {
+	isWaylandCursorBackendActive,
+	startWaylandCursorBackend,
+	stopWaylandCursorBackend,
+} from "../cursor/waylandKde";
 import { getFfmpegBinaryPath } from "../ffmpeg/binary";
 import { getMonitorHandles } from "../monitorResolver";
 import {
@@ -1864,6 +1869,7 @@ export function registerRecordingHandlers(
 		if (recording) {
 			stopCursorCapture();
 			stopInteractionCapture();
+			stopWaylandCursorBackend();
 			startWindowBoundsCapture();
 			void startNativeCursorMonitor();
 			setIsCursorCaptureActive(true);
@@ -1873,6 +1879,11 @@ export function registerRecordingHandlers(
 			resetCursorCaptureClock();
 			setLinuxCursorScreenPoint(null);
 			setLastLeftClick(null);
+			// The KDE Wayland helper must be running before the first sample so
+			// KWin has already primed an absolute cursor position.
+			if (isWaylandCursorBackendActive()) {
+				startWaylandCursorBackend();
+			}
 			sampleCursorPoint();
 			startCursorSampling();
 			void startInteractionCapture();
@@ -1880,6 +1891,7 @@ export function registerRecordingHandlers(
 			setIsCursorCaptureActive(false);
 			stopCursorCapture();
 			stopInteractionCapture();
+			stopWaylandCursorBackend();
 			stopWindowBoundsCapture();
 			stopNativeCursorMonitor();
 			showCursor();

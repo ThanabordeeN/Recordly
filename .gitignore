@@ -38,6 +38,7 @@ electron/native/wgc-capture/build/
 electron/native/cursor-monitor/build/
 electron/native/gpu-export-probe/build/
 electron/native/nvidia-cuda-compositor/build/
+electron/native/wayland-cursor/build/
 electron/native/bin/*/whisper-*
 electron/native/bin/*/whisper-runtime.json
 

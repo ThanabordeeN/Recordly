@@ -222,6 +222,9 @@ Target-specific build commands are also available:
 - `npm run build:mac`
 - `npm run build:win`
 - `npm run build:linux`
+- `npm run build:linux-wayland` - dedicated KDE Plasma / KWin native-Wayland
+  AppImage with accurate cursor telemetry and Auto Zoom. See
+  [docs/linux-kde-wayland.md](docs/linux-kde-wayland.md).
 
 ---
 

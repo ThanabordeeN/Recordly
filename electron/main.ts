@@ -16,8 +16,13 @@ import {
 	Tray,
 } from "electron";
 import { RECORDINGS_DIR } from "./appPaths";
+import {
+	formatCursorBackendStartupLogs,
+	resolveStartupCursorBackend,
+} from "./cursorBackendStartup";
 import { showCursor } from "./cursorHider";
 import { getGpuSwitches } from "./gpuSwitches";
+import { stopWaylandCursorBackend } from "./ipc/cursor/waylandKde";
 import {
 	cleanupAllExportStreams,
 	cleanupNativeVideoExportSessions,
@@ -25,6 +30,8 @@ import {
 	killWindowsCaptureProcess,
 	registerIpcHandlers,
 } from "./ipc/handlers";
+import { isWaylandCursorHelperAvailable } from "./ipc/paths/binaries";
+import { setCursorBackend } from "./ipc/state";
 import { ensureMediaServer } from "./mediaServer";
 import { hardenWebContentsNavigation, shouldHardenWebContentsType } from "./navigationPolicy";
 import { shouldGrantDisplayCapture, shouldGrantMediaPermission } from "./permissionPolicy";
@@ -861,11 +868,41 @@ function createSourceSelectorWindowWrapper() {
 	return sourceSelectorWindow;
 }
 
+/**
+ * Resolve and announce the cursor telemetry backend once, at startup.
+ *
+ * The dedicated KDE Wayland build refuses to run under X11 rather than falling
+ * back to uiohook, because a silent fallback there is exactly the broken cursor
+ * telemetry this build exists to avoid.
+ */
+function initializeCursorTelemetryBackend() {
+	const resolution = resolveStartupCursorBackend({
+		resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
+		isWaylandHelperAvailable: isWaylandCursorHelperAvailable(),
+	});
+
+	for (const line of formatCursorBackendStartupLogs(resolution)) {
+		console.log(line);
+	}
+
+	if (resolution.fatal) {
+		console.error(`[CursorTelemetry] ${resolution.fatal.message}`);
+		dialog.showErrorBox("Recordly (KDE Wayland build)", resolution.fatal.message);
+		app.exit(1);
+		return;
+	}
+
+	setCursorBackend(resolution.backend);
+}
+
 // On macOS, applications and their menu bar stay active until the user quits
 // explicitly with Cmd + Q.
 app.on("before-quit", () => {
 	isAppQuitting = true;
 	killWindowsCaptureProcess();
+	// Also unloads the KWin bridge script; leaving it behind would keep KWin
+	// pushing cursor events at a dead bus name.
+	stopWaylandCursorBackend();
 	showCursor();
 	cleanupNativeVideoExportSessions();
 	void cleanupAllExportStreams();
@@ -892,6 +929,8 @@ app.whenReady().then(async () => {
 	if (process.platform === "win32") {
 		app.setAppUserModelId("dev.recordly.app");
 	}
+
+	initializeCursorTelemetryBackend();
 
 	session.defaultSession.setPermissionCheckHandler(
 		(webContents, permission, requestingOrigin, details) => {

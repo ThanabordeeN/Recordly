@@ -7,11 +7,13 @@ import {
 import {
 	activeCursorSamples,
 	currentCursorVisualType,
+	cursorBackend,
 	cursorCaptureAccumulatedPausedMs,
 	cursorCaptureInterval,
 	cursorCapturePauseStartedAtMs,
 	cursorCaptureStartTimeMs,
 	isCursorCaptureActive,
+	latestWaylandCursorPoint,
 	linuxCursorScreenPoint,
 	pendingCursorSamples,
 	selectedSource,
@@ -21,9 +23,11 @@ import {
 	setCursorCaptureInterval,
 	setCursorCapturePauseStartedAtMs,
 	setPendingCursorSamples,
+	waylandOutputs,
 } from "../state";
 import type { CursorInteractionType, CursorTelemetryPoint, CursorVisualType } from "../types";
 import { getScreen, getTelemetryPathForVideo } from "../utils";
+import { type DisplayLike, normalizeWaylandCursorPoint } from "./waylandCoordinates";
 
 export function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
@@ -164,7 +168,57 @@ export function getCursorCaptureElapsedMs(nowMs = Date.now()) {
 	);
 }
 
+/** The Electron display Recordly is capturing, when it can be identified. */
+function getSelectedCaptureDisplay(): DisplayLike | null {
+	const sourceDisplayId = Number(selectedSource?.display_id);
+	if (!Number.isFinite(sourceDisplayId)) {
+		return null;
+	}
+
+	return (
+		getScreen()
+			.getAllDisplays()
+			.find((display) => display.id === sourceDisplayId) ?? null
+	);
+}
+
+/**
+ * KDE Wayland: normalize the last position KWin pushed to us.
+ *
+ * Deliberately has no freshness window. Under Wayland an unchanged coordinate
+ * means the pointer really has not moved, unlike the uiohook cache below where
+ * a stale value means the hook stopped delivering events.
+ */
+function getNormalizedWaylandCursorPoint(): { cx: number; cy: number } | null {
+	const point = latestWaylandCursorPoint;
+	if (!point) {
+		return null;
+	}
+
+	const display = getSelectedCaptureDisplay();
+	const { cx, cy } = normalizeWaylandCursorPoint({
+		point,
+		outputs: waylandOutputs,
+		display,
+		displays: getScreen().getAllDisplays(),
+	});
+
+	return { cx, cy };
+}
+
 export function getNormalizedCursorPoint() {
+	if (cursorBackend === "linux-kde-wayland") {
+		const waylandPoint = getNormalizedWaylandCursorPoint();
+		if (waylandPoint) {
+			return waylandPoint;
+		}
+
+		// KWin has not reported a position yet (the bridge script primes one
+		// within a frame of loading). Reporting the screen centre once is
+		// better than falling back to Electron's stale cursor point.
+		return { cx: 0.5, cy: 0.5 };
+	}
+
 	const fallbackCursor = getScreen().getCursorScreenPoint();
 	const linuxCursorCache = process.platform === "linux" ? linuxCursorScreenPoint : null;
 	const isLinuxCacheFresh = !!linuxCursorCache && Date.now() - linuxCursorCache.updatedAt <= 1000;

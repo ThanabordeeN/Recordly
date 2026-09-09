@@ -22,8 +22,12 @@ describe("shouldStartGlobalInteractionHook", () => {
 	});
 
 	it("keeps global interaction capture enabled on Windows and Linux", () => {
-		expect(shouldStartGlobalInteractionHook("win32")).toBe(true);
-		expect(shouldStartGlobalInteractionHook("linux")).toBe(true);
+		expect(shouldStartGlobalInteractionHook("win32", "linux-x11-uiohook")).toBe(true);
+		expect(shouldStartGlobalInteractionHook("linux", "linux-x11-uiohook")).toBe(true);
+	});
+
+	it("never loads uiohook on the KDE Wayland backend", () => {
+		expect(shouldStartGlobalInteractionHook("linux", "linux-kde-wayland")).toBe(false);
 	});
 });
 

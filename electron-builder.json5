@@ -8,7 +8,10 @@
     "node_modules/ffmpeg-static/**",
     "node_modules/ffprobe-static/**",
     "node_modules/uiohook-napi/**",
-    "electron/native/bin/**"
+    "electron/native/bin/**",
+    // KWin loads the Wayland cursor bridge by filesystem path, so it cannot
+    // stay inside the asar archive.
+    "electron/native/wayland-cursor/kwin/**"
   ],
   "productName": "Recordly",
   "npmRebuild": true,
@@ -22,6 +25,7 @@
     "!dist/wallpapers/**",
     "dist-electron",
     "electron/native/bin",
+    "electron/native/wayland-cursor/kwin",
     "!electron/native/bin/**/whisper-bench*",
     "!electron/native/bin/**/whisper-quantize*",
     "!electron/native/bin/**/whisper-server*",

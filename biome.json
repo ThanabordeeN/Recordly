@@ -109,6 +109,15 @@
 	"css": { "parser": { "cssModules": true, "tailwindDirectives": true } },
 	"overrides": [
 		{
+			"includes": ["electron/native/wayland-cursor/kwin/**"],
+			"linter": {
+				"rules": {
+					"correctness": { "noUndeclaredVariables": "off" },
+					"suspicious": { "noVar": "off" }
+				}
+			}
+		},
+		{
 			"includes": ["*.ts", "*.tsx", "*.mts", "*.cts"],
 			"linter": {
 				"rules": {

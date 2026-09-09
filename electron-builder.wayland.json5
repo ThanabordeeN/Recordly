@@ -1,0 +1,79 @@
+// Dedicated Linux KDE/KWin native-Wayland build.
+//
+// Differs from electron-builder.json5 in three ways:
+//   * a `recordly-build-variant.json` resource stamps the artifact so the app
+//     knows at runtime that it must use the linux-kde-wayland cursor backend
+//     and must refuse to start under X11 instead of silently degrading to
+//     uiohook.  (This is deliberately a resource file rather than
+//     electron-builder's `extraMetadata`, which rewrites the source
+//     package.json in place and strips its scripts.);
+//   * uiohook-napi is excluded, because this build never loads it;
+//   * the Wayland cursor helper and its KWin bridge script are unpacked from
+//     the asar, since KWin loads the script by filesystem path.
+//
+// The normal cross-platform builds are untouched.
+{
+  "$schema": "https://raw.githubusercontent.com/electron-userland/electron-builder/master/packages/app-builder-lib/scheme.json",
+  "appId": "dev.recordly.app",
+  "electronUpdaterCompatibility": ">=2.16",
+  "asar": true,
+  "asarUnpack": [
+    "node_modules/ffmpeg-static/**",
+    "node_modules/ffprobe-static/**",
+    "electron/native/bin/**",
+    "electron/native/wayland-cursor/kwin/**"
+  ],
+  "productName": "Recordly",
+  "npmRebuild": false,
+  "buildDependenciesFromSource": true,
+  "compression": "normal",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist",
+    "!dist/wallpapers/**",
+    "dist-electron",
+    "electron/native/bin",
+    "electron/native/wayland-cursor/kwin",
+    "!electron/native/bin/**/whisper-bench*",
+    "!electron/native/bin/**/whisper-quantize*",
+    "!electron/native/bin/**/whisper-server*",
+    "!electron/native/bin/**/whisper-vad-speech-segments*",
+    // uiohook is the X11 path; the Wayland artifact must not carry it.
+    "!node_modules/uiohook-napi/**",
+    "!node_modules/ffprobe-static/bin/darwin/**",
+    "!node_modules/ffprobe-static/bin/linux/**",
+    "!node_modules/ffprobe-static/bin/win32/**",
+    "!electron/native/**/build/**",
+    "!*.png",
+    "!preview*.png",
+    "!*.md",
+    "!README.md",
+    "!CONTRIBUTING.md",
+    "!LICENSE"
+  ],
+  "extraResources": [
+    {
+      "from": "public/wallpapers",
+      "to": "assets/wallpapers"
+    },
+    {
+      "from": "build/recordly-build-variant.wayland.json",
+      "to": "recordly-build-variant.json"
+    }
+  ],
+  "publish": null,
+  "linux": {
+    "target": [
+      {
+        "target": "AppImage",
+        "arch": ["x64"]
+      }
+    ],
+    "icon": "icons/icons/png",
+    "artifactName": "Recordly-wayland-kde-linux-x64.${ext}",
+    "category": "AudioVideo",
+    "executableName": "recordly"
+  }
+}

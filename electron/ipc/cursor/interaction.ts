@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
+	cursorBackend,
 	hasLoggedInteractionHookFailure,
 	interactionCaptureCleanup,
 	isCursorCaptureActive,
@@ -9,6 +10,7 @@ import {
 	setHasLoggedInteractionHookFailure,
 	setInteractionCaptureCleanup,
 	setLastLeftClick,
+	setLatestWaylandCursorPoint,
 	setLinuxCursorScreenPoint,
 } from "../state";
 import type {
@@ -17,6 +19,7 @@ import type {
 	UiohookLike,
 	UiohookModuleNamespace,
 } from "../types";
+import type { CursorBackend } from "./backend";
 import {
 	getCursorCaptureElapsedMs,
 	getHookCursorScreenPoint,
@@ -177,7 +180,21 @@ function loadUiohookModule() {
 	}
 }
 
-export function shouldStartGlobalInteractionHook(platform: NodeJS.Platform = process.platform) {
+/**
+ * Whether the uiohook global hook should be started at all.
+ *
+ * The KDE Wayland backend must never load uiohook: under KWin its X11 event
+ * source reports stale coordinates and drops clicks, and starting it would also
+ * pull an XWayland dependency into a native-Wayland session.
+ */
+export function shouldStartGlobalInteractionHook(
+	platform: NodeJS.Platform = process.platform,
+	backend: CursorBackend = cursorBackend,
+) {
+	if (backend === "linux-kde-wayland") {
+		return false;
+	}
+
 	// On macOS, uiohook can block forever while its native event tap starts
 	// (notably when Accessibility permission is unavailable or stale). Because
 	// start() executes synchronously, that freezes Electron's main thread and
@@ -187,12 +204,22 @@ export function shouldStartGlobalInteractionHook(platform: NodeJS.Platform = pro
 	return platform !== "darwin";
 }
 
-export function recordCursorMouseDown(button: 1 | 2 | 3) {
+function resolveInteractionPoint(waylandPoint?: { x: number; y: number }) {
+	if (waylandPoint && cursorBackend === "linux-kde-wayland") {
+		setLatestWaylandCursorPoint({ ...waylandPoint, updatedAt: Date.now() });
+	}
+
+	return getNormalizedCursorPoint();
+}
+
+export function recordCursorMouseDown(button: 1 | 2 | 3, waylandPoint?: { x: number; y: number }) {
 	if (!isCursorCaptureActive || isCursorCapturePaused()) {
 		return;
 	}
 
-	const point = getNormalizedCursorPoint();
+	// The KDE Wayland backend supplies the exact KWin coordinate the button
+	// event happened at; everything else reads the current sampled position.
+	const point = resolveInteractionPoint(waylandPoint);
 	if (!point) {
 		return;
 	}
@@ -220,12 +247,12 @@ export function recordCursorMouseDown(button: 1 | 2 | 3) {
 	pushCursorSample(point.cx, point.cy, timeMs, interactionType);
 }
 
-export function recordCursorMouseUp() {
+export function recordCursorMouseUp(waylandPoint?: { x: number; y: number }) {
 	if (!isCursorCaptureActive || isCursorCapturePaused()) {
 		return;
 	}
 
-	const point = getNormalizedCursorPoint();
+	const point = resolveInteractionPoint(waylandPoint);
 	if (!point) {
 		return;
 	}
@@ -243,7 +270,11 @@ export async function startInteractionCapture() {
 	}
 
 	if (!shouldStartGlobalInteractionHook()) {
-		console.warn("[CursorTelemetry] Skipping the blocking global interaction hook on macOS.");
+		console.warn(
+			cursorBackend === "linux-kde-wayland"
+				? "[CursorTelemetry] Skipping uiohook: the linux-kde-wayland backend owns cursor and button telemetry."
+				: "[CursorTelemetry] Skipping the blocking global interaction hook on macOS.",
+		);
 		return;
 	}
 

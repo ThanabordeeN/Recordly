@@ -1,4 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { type CursorBackend, resolveCursorBackend } from "./cursor/backend";
+import type { WaylandOutput } from "./cursor/waylandCoordinates";
+import type { WaylandButtonCapture } from "./cursor/waylandProtocol";
 import type {
 	CursorInteractionType,
 	CursorTelemetryPoint,
@@ -85,6 +88,24 @@ export let interactionCaptureCleanup: (() => void) | null = null;
 export let hasLoggedInteractionHookFailure = false;
 export let lastLeftClick: { timeMs: number; cx: number; cy: number } | null = null;
 export let linuxCursorScreenPoint: { x: number; y: number; updatedAt: number } | null = null;
+
+// ── Cursor telemetry backend ──────────────────────────────────────────────────
+// Resolved for real during app startup (main.ts) once helper availability is
+// known; this default keeps non-Electron unit tests and early callers sane.
+export let cursorBackend: CursorBackend = resolveCursorBackend({
+	platform: process.platform,
+	env: process.env,
+}).backend;
+
+// ── KDE Wayland cursor backend ────────────────────────────────────────────────
+// Latest absolute pointer position pushed by KWin, in KWin logical coordinates.
+// There is no freshness window: on Wayland an unchanged position means the
+// pointer genuinely has not moved.
+export let latestWaylandCursorPoint: { x: number; y: number; updatedAt: number } | null = null;
+export let waylandOutputs: WaylandOutput[] = [];
+export let waylandCursorHelperProcess: ChildProcessWithoutNullStreams | null = null;
+export let waylandCursorHelperBuffer = "";
+export let waylandButtonCapture: WaylandButtonCapture = "unknown";
 export let selectedWindowBounds: WindowBounds | null = null;
 export let windowBoundsCaptureInterval: NodeJS.Timeout | null = null;
 
@@ -262,6 +283,24 @@ export function setHasLoggedInteractionHookFailure(v: boolean) {
 }
 export function setLastLeftClick(v: { timeMs: number; cx: number; cy: number } | null) {
 	lastLeftClick = v;
+}
+export function setCursorBackend(v: CursorBackend) {
+	cursorBackend = v;
+}
+export function setLatestWaylandCursorPoint(v: { x: number; y: number; updatedAt: number } | null) {
+	latestWaylandCursorPoint = v;
+}
+export function setWaylandOutputs(v: WaylandOutput[]) {
+	waylandOutputs = v;
+}
+export function setWaylandCursorHelperProcess(v: ChildProcessWithoutNullStreams | null) {
+	waylandCursorHelperProcess = v;
+}
+export function setWaylandCursorHelperBuffer(v: string) {
+	waylandCursorHelperBuffer = v;
+}
+export function setWaylandButtonCapture(v: WaylandButtonCapture) {
+	waylandButtonCapture = v;
 }
 export function setLinuxCursorScreenPoint(v: { x: number; y: number; updatedAt: number } | null) {
 	linuxCursorScreenPoint = v;
