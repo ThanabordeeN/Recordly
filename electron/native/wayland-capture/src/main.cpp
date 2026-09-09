@@ -223,6 +223,7 @@ int main(int argc, char **argv) {
 	bool usePortalFd = false;
 	std::string systemAudioDevice;
 	std::string microphoneDevice;
+	std::string vaapiDevice;
 	(void)usePortalFd;
 
 	for (int i = 1; i < argc; i++) {
@@ -242,6 +243,10 @@ int main(int argc, char **argv) {
 			ffmpegPath = argv[++i];
 		} else if (flag == "--gst-launch" && hasValue) {
 			gstPath = argv[++i];
+		} else if (flag == "--vaapi-device" && hasValue) {
+			// A DRM render node, e.g. /dev/dri/renderD128. Only useful with an
+			// ffmpeg built with VAAPI; the caller checks that first.
+			vaapiDevice = argv[++i];
 		} else if (flag == "--system-audio" && hasValue) {
 			// A PulseAudio/PipeWire source name, normally "<default sink>.monitor".
 			systemAudioDevice = argv[++i];
@@ -358,19 +363,32 @@ int main(int argc, char **argv) {
 		"fd=" + std::to_string(kPipeWireChildFd),
 		"path=" + std::to_string(session.nodeId),
 		"do-timestamp=true",
+		// Without this the pipeline adopts PipeWire's clock, whose running time
+		// advanced at half real speed here: a 21 s recording came out as an
+		// 11 s video regardless of frame rate, transport or encoder. Using the
+		// system clock instead makes the timestamps match the wall clock.
+		"provide-clock=false",
 		"!",
 		"videoconvert",
 		"!",
-		// A screen only produces frames when something changes, so the raw
-		// stream is variable rate. Y4M carries no timestamps, which would make
-		// the finished video shorter than the recording by however long the
-		// screen sat still. videorate repeats the last frame to a constant rate
-		// so the duration matches wall clock.
+		// A compositor only emits a frame when something is damaged, and with
+		// the cursor hidden from the stream even moving the pointer damages
+		// nothing. An idle screen therefore produces no frames at all, and the
+		// recording ends up as short as the parts that changed. videorate
+		// repeats the last frame so the timeline keeps pace with the clock.
 		"videorate",
 		"!",
 		"video/x-raw,format=I420,framerate=" + std::to_string(frameRate) + "/1",
 		"!",
-		"y4menc",
+		// Matroska, not Y4M. A screen only produces frames when something
+		// changes, so the stream is variable rate -- and Y4M carries no
+		// timestamps, which left ffmpeg deriving the length from "frames
+		// received / declared rate". Any frame not delivered then shortened the
+		// video and sped it up; measured at exactly half on this hardware.
+		// Matroska carries the timestamps, so the length follows the clock no
+		// matter how the frames arrive.
+		"matroskamux",
+		"streamable=true",
 		"!",
 		"fdsink",
 		"fd=1",
@@ -407,8 +425,21 @@ int main(int argc, char **argv) {
 	}
 
 	std::vector<std::string> ffmpegArgs = {
-		ffmpegPath, "-hide_banner", "-loglevel", "error",
-		"-f",       "yuv4mpegpipe", "-i",        "pipe:0",
+		ffmpegPath,
+		"-hide_banner",
+		"-loglevel",
+		"error",
+		"-f",
+		"matroska",
+		// pipewiresrc's timestamps advance at half real speed on this
+		// compositor: a 21 s recording arrived stamped as 11 s, unchanged by
+		// frame rate, transport, encoder or clock choice, while the identical
+		// pipeline fed by videotestsrc was exact. Rather than trusting the
+		// source's idea of time, stamp each frame as it actually arrives.
+		"-use_wallclock_as_timestamps",
+		"1",
+		"-i",
+		"pipe:0",
 	};
 
 	int audioInputs = 0;
@@ -429,6 +460,10 @@ int main(int argc, char **argv) {
 
 	ffmpegArgs.push_back("-r");
 	ffmpegArgs.push_back(std::to_string(frameRate));
+	// Explicitly constant rate: the wall-clock stamps above are what the
+	// duplication is derived from.
+	ffmpegArgs.push_back("-fps_mode");
+	ffmpegArgs.push_back("cfr");
 
 	if (audioInputs == 2) {
 		// System audio and microphone become one track; keeping them separate
@@ -456,11 +491,30 @@ int main(int argc, char **argv) {
 		ffmpegArgs.push_back("-shortest");
 	}
 
+	if (!vaapiDevice.empty()) {
+		// Hardware encoding keeps a 2880x1800 screen comfortably real time and
+		// leaves the CPU to the rest of the app.
+		for (const std::string &token : {
+				 std::string("-vaapi_device"), vaapiDevice, std::string("-vf"),
+				 std::string("format=nv12,hwupload"), std::string("-c:v"),
+				 std::string("h264_vaapi"), std::string("-qp"), std::string("24"),
+			 }) {
+			ffmpegArgs.push_back(token);
+		}
+	} else {
+		// ultrafast, not veryfast: a 2880x1800 screen has to be encoded in real
+		// time alongside the rest of the app, and an encoder that falls behind
+		// stalls the pipeline.
+		for (const std::string &token : {
+				 std::string("-c:v"), std::string("libx264"), std::string("-preset"),
+				 std::string("ultrafast"), std::string("-pix_fmt"), std::string("yuv420p"),
+			 }) {
+			ffmpegArgs.push_back(token);
+		}
+	}
+
 	for (const std::string &token : {
-			 std::string("-c:v"), std::string("libx264"), std::string("-preset"),
-			 std::string("veryfast"), std::string("-pix_fmt"), std::string("yuv420p"),
-			 std::string("-movflags"), std::string("+faststart"), std::string("-y"),
-			 outputPath,
+			 std::string("-movflags"), std::string("+faststart"), std::string("-y"), outputPath,
 		 }) {
 		ffmpegArgs.push_back(token);
 	}
