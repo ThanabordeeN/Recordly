@@ -540,12 +540,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		enabled?: boolean;
 		capturesSystemAudio?: boolean;
 		capturesMicrophone?: boolean;
+		usesNonDefaultMicrophone?: boolean;
 		sourceId?: string | null;
 	}) => {
 		return ipcRenderer.invoke("evaluate-wayland-capture", request);
 	},
-	startWaylandCapture: (request: { fileName?: string; frameRate?: number }) => {
+	startWaylandCapture: (request: {
+		fileName?: string;
+		frameRate?: number;
+		capturesSystemAudio?: boolean;
+		capturesMicrophone?: boolean;
+	}) => {
 		return ipcRenderer.invoke("start-wayland-capture", request);
+	},
+	setWaylandCapturePaused: (paused: boolean) => {
+		return ipcRenderer.invoke("set-wayland-capture-paused", paused);
 	},
 	stopWaylandCapture: () => {
 		return ipcRenderer.invoke("stop-wayland-capture");

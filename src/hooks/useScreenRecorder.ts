@@ -401,6 +401,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const recordingSessionTimestamp = useRef<number | null>(null);
 	const nativeScreenRecording = useRef(false);
 	const nativeWindowsRecording = useRef(false);
+	// Cursor-free Wayland capture: the main process records the screen through
+	// its own desktop-portal session so the system cursor stays out of the
+	// frames. Kept separate from nativeScreenRecording because it has its own
+	// start/stop IPC and no warm-start behaviour.
+	const waylandCaptureRecording = useRef(false);
 	const nativeWarmStartActive = useRef(false);
 	const pendingNativeCleanupPath = useRef<string | null>(null);
 	const recordingStartGeneration = useRef(0);
@@ -1266,6 +1271,33 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const stopRecording = useRef(() => {
 		recordingStartGeneration.current += 1;
 		setPaused(false);
+		if (waylandCaptureRecording.current) {
+			waylandCaptureRecording.current = false;
+			setRecording(false);
+			setFinalizing(true);
+			void (async () => {
+				try {
+					const webcamPathPromise = stopWebcamRecorder();
+					await window.electronAPI.setRecordingState(false);
+					const result = await window.electronAPI.stopWaylandCapture();
+					const webcamPath = await webcamPathPromise;
+					if (!result.success || !result.path) {
+						await notifyRecordingFinalizationFailure(
+							result.message ?? "The screen capture could not be finished.",
+						);
+						return;
+					}
+					await finalizeRecordingSession(result.path, webcamPath);
+				} catch (error) {
+					console.error("Failed to finish the Wayland capture:", error);
+					await notifyRecordingFinalizationFailure(String(error));
+				} finally {
+					setFinalizing(false);
+					cleanupCapturedMedia();
+				}
+			})();
+			return;
+		}
 		if (nativeScreenRecording.current && nativeWarmStartActive.current) {
 			setRecording(false);
 			void (async () => {
@@ -1706,6 +1738,64 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 				recordingSessionTimestamp.current = Date.now();
 				resetRecordingClock(recordingSessionTimestamp.current);
+			}
+
+			// Cursor-free capture is offered before the browser path, but only
+			// when the main process says this recording qualifies. Any refusal
+			// carries a reason, and every failure falls through to the existing
+			// path rather than aborting the recording.
+			if (!useNativeCapture) {
+				try {
+					const decision = await window.electronAPI.evaluateWaylandCapture({
+						capturesSystemAudio: systemAudioEnabled,
+						capturesMicrophone: microphoneEnabled,
+						usesNonDefaultMicrophone: Boolean(microphoneDeviceId),
+						sourceId: selectedSource.id ?? null,
+					});
+
+					if (decision.use) {
+						const timestamp = recordingSessionTimestamp.current ?? Date.now();
+						const started = await window.electronAPI.startWaylandCapture({
+							fileName: `${RECORDING_FILE_PREFIX}${timestamp}.mp4`,
+							frameRate: TARGET_FRAME_RATE,
+							capturesSystemAudio: systemAudioEnabled,
+							capturesMicrophone: microphoneEnabled,
+						});
+
+						if (started.success) {
+							if (startWasCancelled()) {
+								await window.electronAPI.stopWaylandCapture();
+								cleanupCapturedMedia();
+								await stopWebcamRecorder();
+								return;
+							}
+
+							waylandCaptureRecording.current = true;
+							setRecording(true);
+							resetRecordingClock(Date.now());
+							await window.electronAPI.setRecordingState(true);
+							return;
+						}
+
+						if (started.cancelled) {
+							cleanupCapturedMedia();
+							await stopWebcamRecorder();
+							return;
+						}
+
+						console.warn(
+							"Cursor-free capture could not start; using the browser path:",
+							started.message,
+						);
+					} else {
+						console.log(`[WaylandCapture] ${decision.message}`);
+					}
+				} catch (error) {
+					console.warn(
+						"Could not evaluate cursor-free capture; using the browser path:",
+						error,
+					);
+				}
 			}
 
 			let nativeWindowsCaptureStartFailed = false;
@@ -2281,6 +2371,23 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 	const pauseRecording = useCallback(() => {
 		if (!recording || paused) return;
+		if (waylandCaptureRecording.current) {
+			void (async () => {
+				await window.electronAPI.setWaylandCapturePaused(true);
+				if (webcamRecorder.current?.state === "recording") {
+					webcamRecorder.current.pause();
+				}
+				const boundaryMs = Date.now();
+				markRecordingPaused(boundaryMs);
+				setPaused(true);
+				try {
+					await window.electronAPI.pauseCursorCapture(boundaryMs);
+				} catch (error) {
+					console.warn("Failed to pause cursor capture:", error);
+				}
+			})();
+			return;
+		}
 		if (nativeScreenRecording.current) {
 			void (async () => {
 				const result = await window.electronAPI.pauseNativeScreenRecording();
@@ -2327,6 +2434,23 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 	const resumeRecording = useCallback(() => {
 		if (!recording || !paused) return;
+		if (waylandCaptureRecording.current) {
+			void (async () => {
+				await window.electronAPI.setWaylandCapturePaused(false);
+				if (webcamRecorder.current?.state === "paused") {
+					webcamRecorder.current.resume();
+				}
+				const boundaryMs = Date.now();
+				markRecordingResumed(boundaryMs);
+				setPaused(false);
+				try {
+					await window.electronAPI.resumeCursorCapture(boundaryMs);
+				} catch (error) {
+					console.warn("Failed to resume cursor capture:", error);
+				}
+			})();
+			return;
+		}
 		if (nativeScreenRecording.current) {
 			void (async () => {
 				const result = await window.electronAPI.resumeNativeScreenRecording();

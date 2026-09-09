@@ -844,14 +844,21 @@ interface Window {
 			enabled?: boolean;
 			capturesSystemAudio?: boolean;
 			capturesMicrophone?: boolean;
+			usesNonDefaultMicrophone?: boolean;
 			sourceId?: string | null;
 		}) => Promise<{ use: true } | { use: false; reason: string; message: string }>;
-		startWaylandCapture: (request: { fileName?: string; frameRate?: number }) => Promise<{
+		startWaylandCapture: (request: {
+			fileName?: string;
+			frameRate?: number;
+			capturesSystemAudio?: boolean;
+			capturesMicrophone?: boolean;
+		}) => Promise<{
 			success: boolean;
 			path?: string;
 			message?: string;
 			cancelled?: boolean;
 		}>;
+		setWaylandCapturePaused: (paused: boolean) => Promise<{ success: boolean }>;
 		stopWaylandCapture: () => Promise<{
 			success: boolean;
 			path?: string;

@@ -35,17 +35,22 @@ describe("decideWaylandCapture", () => {
 		expect((decision as { message: string }).message).toContain("browser path");
 	});
 
-	it("defers to the browser path whenever audio is wanted", () => {
-		// The bundled ffmpeg has no PulseAudio input, so this path cannot record
-		// sound yet; silently dropping the audio would be worse than not using it.
-		expect(decideWaylandCapture({ ...base, capturesMicrophone: true })).toMatchObject({
-			use: false,
-			reason: "audio-requested",
-		});
-		expect(decideWaylandCapture({ ...base, capturesSystemAudio: true })).toMatchObject({
-			use: false,
-			reason: "audio-requested",
-		});
+	it("records audio itself, so audio alone does not force a fallback", () => {
+		expect(decideWaylandCapture({ ...base, capturesSystemAudio: true })).toEqual({ use: true });
+		expect(decideWaylandCapture({ ...base, capturesMicrophone: true })).toEqual({ use: true });
+	});
+
+	it("defers when a specific microphone was chosen", () => {
+		// PulseAudio source names do not map to the browser device ids Recordly
+		// selects with, so recording the default mic instead would be silently
+		// capturing the wrong input.
+		expect(
+			decideWaylandCapture({
+				...base,
+				capturesMicrophone: true,
+				usesNonDefaultMicrophone: true,
+			}),
+		).toMatchObject({ use: false, reason: "specific-microphone" });
 	});
 
 	it("refuses a window source", () => {

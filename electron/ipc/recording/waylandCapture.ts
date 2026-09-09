@@ -48,6 +48,10 @@ export function startWaylandCapture(options: {
 	outputPath: string;
 	cursorMode?: WaylandCaptureCursorMode;
 	frameRate?: number;
+	/** PulseAudio source for system audio, normally "@DEFAULT_MONITOR@". */
+	systemAudioDevice?: string;
+	/** PulseAudio source for the microphone, normally "default". */
+	microphoneDevice?: string;
 	spawnHelper?: (helperPath: string, args: string[]) => ChildProcessWithoutNullStreams | null;
 	log?: (message: string) => void;
 	warn?: (message: string) => void;
@@ -85,6 +89,13 @@ export function startWaylandCapture(options: {
 			"--ffmpeg",
 			options.ffmpegPath ?? getFfmpegBinaryPath(),
 		];
+
+		if (options.systemAudioDevice) {
+			args.push("--system-audio", options.systemAudioDevice);
+		}
+		if (options.microphoneDevice) {
+			args.push("--microphone", options.microphoneDevice);
+		}
 
 		let helper: ChildProcessWithoutNullStreams | null = null;
 		try {
@@ -212,6 +223,25 @@ export function startWaylandCapture(options: {
 			});
 		});
 	});
+}
+
+/**
+ * Suspends or resumes the frame source.
+ *
+ * The paused stretch produces no frames and therefore vanishes from the
+ * finished video, which matches how a paused recording is expected to behave.
+ */
+export function setWaylandCapturePaused(paused: boolean): boolean {
+	if (!activeCapture) {
+		return false;
+	}
+
+	try {
+		activeCapture.process.stdin?.write(paused ? "pause\n" : "resume\n");
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 /**

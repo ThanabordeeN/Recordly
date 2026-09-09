@@ -4,9 +4,9 @@
  *
  * The helper exists to keep the system cursor out of the frames, which the
  * portal will only do for a client that negotiates its own ScreenCast session.
- * It records video only: the bundled ffmpeg has no PulseAudio input, so audio
- * still has to come from the renderer, and until that is muxed in this path is
- * limited to recordings with no audio.
+ * It records the screen and its audio itself, so the only things that send a
+ * recording back to the browser path are a session it does not support, a
+ * source that is not a monitor, or a build without the helper.
  */
 
 export type WaylandCaptureDecision =
@@ -17,7 +17,7 @@ export type WaylandCaptureSkipReason =
 	| "not-kde-wayland"
 	| "disabled"
 	| "helper-missing"
-	| "audio-requested"
+	| "specific-microphone"
 	| "window-source";
 
 export type WaylandCaptureDecisionInput = {
@@ -28,6 +28,14 @@ export type WaylandCaptureDecisionInput = {
 	isHelperAvailable: boolean;
 	capturesSystemAudio: boolean;
 	capturesMicrophone: boolean;
+	/**
+	 * Whether the user picked a specific microphone rather than the system
+	 * default. The helper captures through PulseAudio, whose source names do not
+	 * map to the browser device ids Recordly selects with, so honouring the
+	 * choice is not possible yet and recording the wrong microphone silently
+	 * would be worse than using the browser path.
+	 */
+	usesNonDefaultMicrophone?: boolean;
 	/** Source id, e.g. "screen:linux-portal" or "window:123". */
 	sourceId?: string | null;
 };
@@ -59,13 +67,13 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 		};
 	}
 
-	if (input.capturesSystemAudio || input.capturesMicrophone) {
+	if (input.capturesMicrophone && input.usesNonDefaultMicrophone) {
 		return {
 			use: false,
-			reason: "audio-requested",
+			reason: "specific-microphone",
 			message:
-				"Cursor-free capture records video only for now, so a recording with audio uses " +
-				"the browser path instead.",
+				"Cursor-free capture can only record the system default microphone, so this " +
+				"recording uses the browser path instead.",
 		};
 	}
 

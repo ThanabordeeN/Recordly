@@ -81,7 +81,11 @@ import {
 	waitForNativeCaptureStop,
 } from "../recording/mac";
 import { resolveRecordedVideoStoragePath } from "../recording/storagePath";
-import { startWaylandCapture, stopWaylandCapture } from "../recording/waylandCapture";
+import {
+	setWaylandCapturePaused,
+	startWaylandCapture,
+	stopWaylandCapture,
+} from "../recording/waylandCapture";
 import { decideWaylandCapture } from "../recording/waylandCapturePolicy";
 import {
 	attachWindowsCaptureLifecycle,
@@ -1588,15 +1592,20 @@ export function registerRecordingHandlers(
 				enabled?: boolean;
 				capturesSystemAudio?: boolean;
 				capturesMicrophone?: boolean;
+				usesNonDefaultMicrophone?: boolean;
 				sourceId?: string | null;
 			} = {},
 		) => {
 			return decideWaylandCapture({
 				cursorBackend,
-				enabled: request.enabled === true,
+				// Opt-in through the environment for now: the browser path stays
+				// the default until this has had real use.
+				enabled:
+					request.enabled === true || process.env.RECORDLY_WAYLAND_CAPTURE === "1",
 				isHelperAvailable: isWaylandCaptureHelperAvailable(),
 				capturesSystemAudio: request.capturesSystemAudio === true,
 				capturesMicrophone: request.capturesMicrophone === true,
+				usesNonDefaultMicrophone: request.usesNonDefaultMicrophone === true,
 				sourceId: request.sourceId ?? null,
 			});
 		},
@@ -1604,7 +1613,15 @@ export function registerRecordingHandlers(
 
 	ipcMain.handle(
 		"start-wayland-capture",
-		async (_, request: { fileName?: string; frameRate?: number } = {}) => {
+		async (
+			_,
+			request: {
+				fileName?: string;
+				frameRate?: number;
+				capturesSystemAudio?: boolean;
+				capturesMicrophone?: boolean;
+			} = {},
+		) => {
 			try {
 				const recordingsDir = await getRecordingsDir();
 				const outputPath = resolveRecordedVideoStoragePath(
@@ -1616,6 +1633,11 @@ export function registerRecordingHandlers(
 					outputPath,
 					cursorMode: "hidden",
 					frameRate: request.frameRate ?? 60,
+					// PulseAudio resolves these aliases itself, so no external
+					// tool is needed to find the current default devices.
+					systemAudioDevice:
+						request.capturesSystemAudio === true ? "@DEFAULT_MONITOR@" : undefined,
+					microphoneDevice: request.capturesMicrophone === true ? "default" : undefined,
 				});
 
 				if (!result.success) {
@@ -1634,6 +1656,10 @@ export function registerRecordingHandlers(
 			}
 		},
 	);
+
+	ipcMain.handle("set-wayland-capture-paused", (_, paused: unknown) => {
+		return { success: setWaylandCapturePaused(paused === true) };
+	});
 
 	ipcMain.handle("stop-wayland-capture", async () => {
 		const result = await stopWaylandCapture();

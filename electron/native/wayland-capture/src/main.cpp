@@ -509,6 +509,7 @@ int main(int argc, char **argv) {
 	// Wait for "stop" on stdin, a signal, or either child dying on its own.
 	// The portal connection is polled alongside stdin: it has to stay serviced
 	// for the whole recording, because the session dies with it.
+	bool paused = false;
 	while (!g_stopRequested) {
 		struct pollfd fds[2] = {};
 		fds[0].fd = STDIN_FILENO;
@@ -532,15 +533,39 @@ int main(int argc, char **argv) {
 			    memmem(buffer, static_cast<size_t>(bytes), "stop", 4) != nullptr) {
 				break;
 			}
+
+			const size_t length = static_cast<size_t>(bytes);
+			// Pausing suspends the frame source rather than the encoder, so the
+			// paused stretch simply produces no frames and disappears from the
+			// finished video -- which is what pausing a recording should do.
+			// ffmpeg stays alive and blocks on an empty pipe meanwhile.
+			if (memmem(buffer, length, "pause", 5) != nullptr && !paused) {
+				kill(gstPid, SIGSTOP);
+				paused = true;
+				emitLine("{\"type\":\"status\",\"state\":\"paused\",\"timestamp\":" +
+				         std::to_string(nowMs()) + "}");
+			} else if (memmem(buffer, length, "resume", 6) != nullptr && paused) {
+				kill(gstPid, SIGCONT);
+				paused = false;
+				emitLine("{\"type\":\"status\",\"state\":\"resumed\",\"timestamp\":" +
+				         std::to_string(nowMs()) + "}");
+			}
 		}
 
 		int status = 0;
+		// WUNTRACED is deliberately absent: a paused source is stopped, not
+		// dead, and must not be mistaken for a crash.
 		if (waitpid(gstPid, &status, WNOHANG) == gstPid) {
 			emitError("the frame source exited unexpectedly");
 			break;
 		}
 	}
 
+	// A suspended process would never see SIGINT, so wake it before asking it
+	// to finish.
+	if (paused) {
+		kill(gstPid, SIGCONT);
+	}
 	// SIGINT makes gst-launch send EOS, which lets ffmpeg flush and write the
 	// moov atom instead of leaving a truncated file behind.
 	kill(gstPid, SIGINT);
