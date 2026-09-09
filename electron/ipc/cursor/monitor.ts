@@ -63,7 +63,9 @@ export function handleCursorMonitorStdout(chunk: Buffer) {
 }
 
 export function stopNativeCursorMonitor() {
-	setCurrentCursorVisualType("arrow");
+	setCurrentCursorVisualType(
+		process.platform === "darwin" || process.platform === "win32" ? "arrow" : undefined,
+	);
 
 	if (!nativeCursorMonitorProcess) {
 		return;
@@ -88,7 +90,14 @@ export async function startNativeCursorMonitor() {
 	stopNativeCursorMonitor();
 
 	if (process.platform !== "darwin" && process.platform !== "win32") {
-		setCurrentCursorVisualType("arrow");
+		// No native cursor monitor exists here, so we genuinely do not know the
+		// cursor shape. Leave it undefined rather than asserting "arrow":
+		// zoomSuggestionUtils.applyCursorTypeInRange() only fills a sample that
+		// has *no* cursorType, so a blanket "arrow" silently suppresses
+		// Recordly's own inference of "closed-hand" during drags and "text"
+		// during selections. The renderer already falls back to "arrow" when
+		// the field is absent (findLatestStableCursorType).
+		setCurrentCursorVisualType(undefined);
 		return;
 	}
 
