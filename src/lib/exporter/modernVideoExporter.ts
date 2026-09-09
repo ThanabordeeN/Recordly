@@ -375,9 +375,12 @@ export class ModernVideoExporter {
 	async export(): Promise<ExportResult> {
 		let useFallbackMediaSource = false;
 		let retriedWithFallbackMediaSource = false;
+		let forcedRenderBackend: ExportRenderBackend | undefined;
+		let retriedWithWebglRenderer = false;
 
 		while (true) {
 			let shouldRetryWithFallbackMediaSource = false;
+			let shouldRetryWithWebglRenderer = false;
 			try {
 				this.cleanup();
 				this.cancelled = false;
@@ -588,7 +591,10 @@ export class ModernVideoExporter {
 				this.renderer = new ModernFrameRenderer({
 					width: this.config.width,
 					height: this.config.height,
-					preferredRenderBackend: undefined,
+					// forcedRenderBackend is set when a WebGPU attempt already
+					// failed; otherwise honour whatever the caller configured.
+					preferredRenderBackend:
+						forcedRenderBackend ?? this.config.preferredRenderBackend,
 					wallpaper: this.config.wallpaper,
 					zoomRegions: this.config.zoomRegions,
 					showShadow: this.config.showShadow,
@@ -900,6 +906,19 @@ export class ModernVideoExporter {
 						"[VideoExporter] Primary decode path failed; retrying export once with a fresh media source.",
 						error,
 					);
+				} else if (!retriedWithWebglRenderer && this.shouldRetryWithWebglRenderer(error)) {
+					// The renderer's own backend loop only falls back while
+					// *initialising* Pixi. A WebGPU device that initialises fine
+					// but then fails mid-render (a driver quirk, or a filter whose
+					// GPU program binds an undefined resource) left the export with
+					// no way out at all. Give it one WebGL attempt before failing.
+					retriedWithWebglRenderer = true;
+					forcedRenderBackend = "webgl";
+					shouldRetryWithWebglRenderer = true;
+					console.warn(
+						"[VideoExporter] WebGPU render path failed; retrying export once with the WebGL renderer.",
+						error,
+					);
 				} else {
 					if (this.cancelled && !this.encoderError) {
 						return {
@@ -918,7 +937,11 @@ export class ModernVideoExporter {
 					};
 				}
 			} finally {
-				if (!shouldRetryWithFallbackMediaSource && this.totalExportStartTimeMs > 0) {
+				if (
+					!shouldRetryWithFallbackMediaSource &&
+					!shouldRetryWithWebglRenderer &&
+					this.totalExportStartTimeMs > 0
+				) {
 					console.log(
 						`[VideoExporter] Final metrics ${JSON.stringify(this.buildExportMetrics())}`,
 					);
@@ -926,10 +949,34 @@ export class ModernVideoExporter {
 				this.cleanup();
 			}
 
-			if (shouldRetryWithFallbackMediaSource) {
+			if (shouldRetryWithFallbackMediaSource || shouldRetryWithWebglRenderer) {
 				continue;
 			}
 		}
+	}
+
+	/**
+	 * Whether a failed export is worth one more attempt on the WebGL renderer.
+	 *
+	 * Only when WebGPU was actually in use, the caller did not pin a backend,
+	 * and the failure was not the encoder's (an unsupported resolution fails
+	 * identically on either renderer, so retrying would just double the wait).
+	 */
+	private shouldRetryWithWebglRenderer(error: unknown): boolean {
+		if (this.cancelled) {
+			return false;
+		}
+		if (this.renderBackend !== "webgpu") {
+			return false;
+		}
+		if (this.config.preferredRenderBackend) {
+			return false;
+		}
+		if (this.encoderError) {
+			return false;
+		}
+
+		return error !== undefined && error !== null;
 	}
 
 	private shouldRetryWithFallbackMediaSource(error: unknown): boolean {
