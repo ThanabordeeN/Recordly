@@ -47,6 +47,7 @@ import {
 	getNativeCaptureHelperBinaryPath,
 	getSystemCursorHelperBinaryPath,
 	getSystemCursorHelperSourcePath,
+	getWaylandCaptureHelperPath,
 	getWindowsCaptureExePath,
 	isWaylandCaptureHelperAvailable,
 } from "../paths/binaries";
@@ -80,6 +81,7 @@ import {
 	waitForNativeCaptureStart,
 	waitForNativeCaptureStop,
 } from "../recording/mac";
+import { resolvePulseSourceName } from "../recording/pulseDevices";
 import { resolveRecordedVideoStoragePath } from "../recording/storagePath";
 import {
 	setWaylandCapturePaused,
@@ -1586,28 +1588,57 @@ export function registerRecordingHandlers(
 	// when it does not, so the caller can fall back with a reason to show.
 	ipcMain.handle(
 		"evaluate-wayland-capture",
-		(
+		async (
 			_,
 			request: {
 				enabled?: boolean;
 				capturesSystemAudio?: boolean;
 				capturesMicrophone?: boolean;
 				usesNonDefaultMicrophone?: boolean;
+				microphoneLabel?: string;
 				sourceId?: string | null;
 			} = {},
 		) => {
-			return decideWaylandCapture({
+			// A specific microphone is only a blocker when its PulseAudio source
+			// cannot be found; otherwise the helper can record exactly the input
+			// the user chose.
+			const resolvedMicrophone =
+				request.usesNonDefaultMicrophone === true
+					? await resolvePulseSourceName(request.microphoneLabel)
+					: "default";
+
+			const input = {
 				cursorBackend,
 				// Opt-in through the environment for now: the browser path stays
 				// the default until this has had real use.
-				enabled:
-					request.enabled === true || process.env.RECORDLY_WAYLAND_CAPTURE === "1",
+				enabled: request.enabled === true || process.env.RECORDLY_WAYLAND_CAPTURE === "1",
 				isHelperAvailable: isWaylandCaptureHelperAvailable(),
 				capturesSystemAudio: request.capturesSystemAudio === true,
 				capturesMicrophone: request.capturesMicrophone === true,
-				usesNonDefaultMicrophone: request.usesNonDefaultMicrophone === true,
+				usesNonDefaultMicrophone:
+					request.usesNonDefaultMicrophone === true && resolvedMicrophone === null,
 				sourceId: request.sourceId ?? null,
-			});
+			};
+			const decision = decideWaylandCapture(input);
+
+			// Logged from the main process on purpose: the renderer's console
+			// does not reach the terminal, and "why did it use the old path?"
+			// is the first question whenever this does not engage.
+			if (decision.use) {
+				console.log("[WaylandCapture] using cursor-free capture for this recording.");
+			} else {
+				console.log(
+					`[WaylandCapture] using the browser path (${decision.reason}): ${decision.message}`,
+				);
+				console.log(
+					`[WaylandCapture] inputs: ${JSON.stringify({
+						...input,
+						helperPath: getWaylandCaptureHelperPath(),
+					})}`,
+				);
+			}
+
+			return decision;
 		},
 	);
 
@@ -1620,6 +1651,7 @@ export function registerRecordingHandlers(
 				frameRate?: number;
 				capturesSystemAudio?: boolean;
 				capturesMicrophone?: boolean;
+				microphoneLabel?: string;
 			} = {},
 		) => {
 			try {
@@ -1637,7 +1669,10 @@ export function registerRecordingHandlers(
 					// tool is needed to find the current default devices.
 					systemAudioDevice:
 						request.capturesSystemAudio === true ? "@DEFAULT_MONITOR@" : undefined,
-					microphoneDevice: request.capturesMicrophone === true ? "default" : undefined,
+					microphoneDevice:
+						request.capturesMicrophone === true
+							? ((await resolvePulseSourceName(request.microphoneLabel)) ?? "default")
+							: undefined,
 				});
 
 				if (!result.success) {

@@ -541,6 +541,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		capturesSystemAudio?: boolean;
 		capturesMicrophone?: boolean;
 		usesNonDefaultMicrophone?: boolean;
+		microphoneLabel?: string;
 		sourceId?: string | null;
 	}) => {
 		return ipcRenderer.invoke("evaluate-wayland-capture", request);
@@ -550,6 +551,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		frameRate?: number;
 		capturesSystemAudio?: boolean;
 		capturesMicrophone?: boolean;
+		microphoneLabel?: string;
 	}) => {
 		return ipcRenderer.invoke("start-wayland-capture", request);
 	},

@@ -1193,7 +1193,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 
 		let micLabel: string | undefined;
-		if ((useNativeMacScreenCapture || useNativeWindowsCapture) && microphoneEnabled) {
+		// Also needed on Linux: the cursor-free capture path matches the chosen
+		// microphone to a PulseAudio source by label, since device ids are
+		// per-origin hashes that mean nothing outside the browser.
+		if (
+			(useNativeMacScreenCapture || useNativeWindowsCapture || platform === "linux") &&
+			microphoneEnabled
+		) {
 			try {
 				const devices = await navigator.mediaDevices.enumerateDevices();
 				const mic = devices.find(
@@ -1750,6 +1756,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 						capturesSystemAudio: systemAudioEnabled,
 						capturesMicrophone: microphoneEnabled,
 						usesNonDefaultMicrophone: Boolean(microphoneDeviceId),
+						// The label is the only thing the browser and PulseAudio
+						// agree on: device ids are per-origin hashes.
+						microphoneLabel: micLabel,
 						sourceId: selectedSource.id ?? null,
 					});
 
@@ -1760,6 +1769,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							frameRate: TARGET_FRAME_RATE,
 							capturesSystemAudio: systemAudioEnabled,
 							capturesMicrophone: microphoneEnabled,
+							microphoneLabel: micLabel,
 						});
 
 						if (started.success) {

@@ -845,6 +845,7 @@ interface Window {
 			capturesSystemAudio?: boolean;
 			capturesMicrophone?: boolean;
 			usesNonDefaultMicrophone?: boolean;
+			microphoneLabel?: string;
 			sourceId?: string | null;
 		}) => Promise<{ use: true } | { use: false; reason: string; message: string }>;
 		startWaylandCapture: (request: {
@@ -852,6 +853,7 @@ interface Window {
 			frameRate?: number;
 			capturesSystemAudio?: boolean;
 			capturesMicrophone?: boolean;
+			microphoneLabel?: string;
 		}) => Promise<{
 			success: boolean;
 			path?: string;
