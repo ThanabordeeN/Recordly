@@ -286,6 +286,75 @@ RECORDLY_CURSOR_BACKEND=linux-kde-wayland npm run dev
 - **Compositor scope.** Only KDE/KWin in V1. On GNOME or wlroots the normal
   build stays on the existing uiohook path.
 
+## Cursor-free capture (`recordly-wayland-capture`)
+
+The desktop portal embeds the system cursor into every captured frame, so a
+recording made through Chromium's `getDisplayMedia` shows two cursors: the real
+one and the one Recordly draws from telemetry. Chromium cannot be asked to
+change that. Measured on this machine:
+
+- `cursor` is **not** in `navigator.mediaDevices.getSupportedConstraints()` --
+  the `cursor: "never"` constraint Recordly passes is silently discarded;
+- Electron's display-media callback accepts only `video`, `audio` and
+  `enableLocalEcho`;
+- Chromium ships no switch for it (only `OpenPipeWireRemote`,
+  `pipewire-main-loop`, `WebRtcPipeWireCamera` mention PipeWire at all).
+
+The portal itself is perfectly capable -- KDE reports
+`AvailableCursorModes = 7` (hidden | embedded | metadata) -- so
+`recordly-wayland-capture` negotiates its own ScreenCast session and asks for
+`cursor_mode=hidden`:
+
+```
+portal ScreenCast (cursor_mode=hidden)   sd-bus, no external deps
+  -> PipeWire node
+  -> GStreamer pipewiresrc ! videoconvert ! y4menc     moves pixels only
+  -> ffmpeg (the one Recordly already bundles)          does the encoding
+  -> H.264 mp4
+```
+
+Y4M is self-describing, so the frame size is never guessed or passed along, and
+no GStreamer encoder plugins are needed.
+
+### Verifying it by hand
+
+```bash
+npm run build:wayland-capture
+electron/native/bin/linux-x64/recordly-wayland-capture   --output /tmp/test.mp4   --ffmpeg node_modules/ffmpeg-static/ffmpeg   --cursor-mode hidden --fps 60
+# pick a screen in the portal dialog, then type "stop" and press enter
+```
+
+Confirm the cursor really is absent by cropping the frame at the position the
+cursor helper reports, at full resolution -- a downscaled frame is not proof, a
+cursor is only about 24 px wide.
+
+### Extra runtime dependency
+
+This path needs `gstreamer1` and `gstreamer1-plugin-pipewire`, which Plasma
+already pulls in. The helper probes for them *before* showing the portal dialog
+and exits with code 7 and an actionable message if either is missing, so a
+machine without them falls back to the existing browser capture instead of
+failing mysteriously after the user has picked a screen.
+
+### Safety: the source is always checked
+
+A portal restore token replays whatever the previous session selected. In
+testing, a token produced a stream whose geometry matched no connected monitor
+while the portal still reported a monitor source type. Both the helper and the
+main process therefore verify `source_type == MONITOR` and refuse to record
+anything else, and restore tokens are **off by default** -- the picker costs one
+click and is what Recordly already does today.
+
+### Not wired into recording yet
+
+The helper, its protocol, and the main-process lifecycle are complete and
+tested, but Recordly still records through the browser path. Finishing the
+integration means following the existing native-capture pattern
+(`windows-wgc` / `mac-screencapturekit`): video from this helper, audio from the
+renderer, then muxed together, plus pause/resume and diagnostics. The bundled
+ffmpeg has no PulseAudio input, so audio has to come from the renderer exactly
+as it does on Windows.
+
 ## Follow-up work for generic Wayland
 
 The backend abstraction (`electron/ipc/cursor/backend.ts`) is shaped so another

@@ -149,6 +149,33 @@ export function getWaylandCursorHelperPath(): string | null {
  * The KWin bridge script has to be a real file on disk: KWin reads it by path
  * over D-Bus, so it must live outside the asar archive (see asarUnpack).
  */
+export function getWaylandCaptureHelperCandidatePaths(): string[] {
+	return [
+		getPrebundledNativeHelperPath("recordly-wayland-capture", getNativeArchTag("linux")),
+		resolveUnpackedAppPath(
+			"electron",
+			"native",
+			"wayland-capture",
+			"build",
+			"recordly-wayland-capture",
+		),
+	];
+}
+
+export function getWaylandCaptureHelperPath(): string | null {
+	for (const candidate of getWaylandCaptureHelperCandidatePaths()) {
+		if (existsSync(candidate)) {
+			return candidate;
+		}
+	}
+
+	return null;
+}
+
+export function isWaylandCaptureHelperAvailable(): boolean {
+	return getWaylandCaptureHelperPath() !== null;
+}
+
 export function getWaylandCursorKWinScriptPath(): string {
 	return resolveUnpackedAppPath(
 		"electron",
