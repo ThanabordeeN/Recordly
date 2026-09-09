@@ -24,6 +24,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -397,10 +398,17 @@ int main(int argc, char **argv) {
 		"streamable=true",
 		"!",
 		"fdsink",
+		// async=false on every sink: a single pipeline will not reach PLAYING
+		// until each branch has prerolled, and a suspended PulseAudio monitor
+		// took ~10 s to wake. The screen produced nothing for that whole window,
+		// so the recording came out that much shorter than the webcam beside it.
+		"async=false",
 		"fd=1",
 	};
 
-	const auto appendAudioBranch = [&gstArgs](const std::string &device, int childFd) {
+	std::vector<std::string> audioArgs = {gstPath, "-q"};
+	const auto appendAudioBranch = [&audioArgs](const std::string &device, int childFd) {
+		// Branches are simply concatenated; each already begins with pulsesrc.
 		for (const std::string &token : {
 				 std::string("pulsesrc"),
 				 "device=" + device,
@@ -417,9 +425,10 @@ int main(int argc, char **argv) {
 				 std::string("wavenc"),
 				 std::string("!"),
 				 std::string("fdsink"),
+				 std::string("async=false"),
 				 "fd=" + std::to_string(childFd),
 			 }) {
-			gstArgs.push_back(token);
+			audioArgs.push_back(token);
 		}
 	};
 
@@ -435,6 +444,14 @@ int main(int argc, char **argv) {
 		"-hide_banner",
 		"-loglevel",
 		"error",
+		// ffmpeg probes the input before deciding stream parameters, which for
+		// this pipe meant roughly seven seconds of screen recorded and thrown
+		// away before the first byte was written. The stream layout is known
+		// here, so there is nothing to probe for.
+		"-analyzeduration",
+		"0",
+		"-probesize",
+		"32",
 		"-f",
 		"matroska",
 		// pipewiresrc's timestamps advance at half real speed on this
@@ -527,11 +544,13 @@ int main(int argc, char **argv) {
 
 	std::vector<InheritedFd> gstFds;
 	gstFds.push_back({session.pipewireFd, kPipeWireChildFd});
+
+	std::vector<InheritedFd> gstAudioFds;
 	if (systemAudioPipe[1] >= 0) {
-		gstFds.push_back({systemAudioPipe[1], kSystemAudioChildFd});
+		gstAudioFds.push_back({systemAudioPipe[1], kSystemAudioChildFd});
 	}
 	if (microphonePipe[1] >= 0) {
-		gstFds.push_back({microphonePipe[1], kMicrophoneChildFd});
+		gstAudioFds.push_back({microphonePipe[1], kMicrophoneChildFd});
 	}
 
 	std::vector<InheritedFd> ffmpegFds;
@@ -542,7 +561,14 @@ int main(int argc, char **argv) {
 		ffmpegFds.push_back({microphonePipe[0], kMicrophoneChildFd});
 	}
 
+	// Two processes on purpose: a single pipeline does not reach PLAYING until
+	// every branch has prerolled, and a suspended PulseAudio monitor took about
+	// ten seconds to wake -- ten seconds in which the screen recorded nothing.
 	const pid_t gstPid = spawnChild(gstArgs, -1, frames[1], gstFds);
+	pid_t audioPid = -1;
+	if (audioArgs.size() > 2) {
+		audioPid = spawnChild(audioArgs, -1, -1, gstAudioFds);
+	}
 	const pid_t ffmpegPid = spawnChild(ffmpegArgs, frames[0], -1, ffmpegFds);
 	// The parent must not keep any pipe end open, or neither child ever sees EOF.
 	for (int fd : {frames[0], frames[1], systemAudioPipe[0], systemAudioPipe[1],
@@ -556,6 +582,25 @@ int main(int argc, char **argv) {
 		emitError("cannot start the capture pipeline");
 		portalCloseScreenCast(&session);
 		return 3;
+	}
+
+	// The portal returns before the compositor is actually streaming: frames
+	// took about six seconds to start flowing here. Announcing "recording" then
+	// would start Recordly's clock and the webcam on an empty screen, leaving
+	// the finished video that much shorter than the timer said.
+	for (int waited = 0; waited < 20000; waited += 100) {
+		struct stat outputStat = {};
+		if (stat(outputPath.c_str(), &outputStat) == 0 && outputStat.st_size > 0) {
+			break;
+		}
+		int status = 0;
+		if (waitpid(gstPid, &status, WNOHANG) == gstPid) {
+			emitError("the frame source exited before producing anything");
+			portalCloseScreenCast(&session);
+			return 3;
+		}
+		struct timespec pollDelay = {0, 100 * 1000 * 1000L};
+		nanosleep(&pollDelay, nullptr);
 	}
 
 	{
@@ -608,11 +653,17 @@ int main(int argc, char **argv) {
 			// ffmpeg stays alive and blocks on an empty pipe meanwhile.
 			if (memmem(buffer, length, "pause", 5) != nullptr && !paused) {
 				kill(gstPid, SIGSTOP);
+				if (audioPid > 0) {
+					kill(audioPid, SIGSTOP);
+				}
 				paused = true;
 				emitLine("{\"type\":\"status\",\"state\":\"paused\",\"timestamp\":" +
 				         std::to_string(nowMs()) + "}");
 			} else if (memmem(buffer, length, "resume", 6) != nullptr && paused) {
 				kill(gstPid, SIGCONT);
+				if (audioPid > 0) {
+					kill(audioPid, SIGCONT);
+				}
 				paused = false;
 				emitLine("{\"type\":\"status\",\"state\":\"resumed\",\"timestamp\":" +
 				         std::to_string(nowMs()) + "}");
@@ -632,6 +683,12 @@ int main(int argc, char **argv) {
 	// to finish.
 	if (paused) {
 		kill(gstPid, SIGCONT);
+		if (audioPid > 0) {
+			kill(audioPid, SIGCONT);
+		}
+	}
+	if (audioPid > 0) {
+		kill(audioPid, SIGINT);
 	}
 	// SIGINT makes gst-launch send EOS, which lets ffmpeg flush and write the
 	// moov atom instead of leaving a truncated file behind.
