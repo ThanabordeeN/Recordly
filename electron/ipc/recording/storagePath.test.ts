@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveRecordedVideoStoragePath } from "./storagePath";
+import { isWebcamRecordingPath, resolveRecordedVideoStoragePath } from "./storagePath";
 
 describe("resolveRecordedVideoStoragePath", () => {
 	const recordingsDir = path.resolve("recordings-root");
@@ -49,5 +49,25 @@ describe("resolveRecordedVideoStoragePath", () => {
 		expect(() => resolveRecordedVideoStoragePath(recordingsDir, value)).toThrow(
 			"Invalid recording file name",
 		);
+	});
+});
+
+describe("isWebcamRecordingPath", () => {
+	it.each([
+		"recording-1720588800000-webcam.mp4",
+		"recording-1720588800000-webcam.webm",
+		"/home/user/.config/Recordly/recordings/recording-1788942955123-webcam.mp4",
+	])("identifies the webcam companion: %s", (videoPath) => {
+		expect(isWebcamRecordingPath(videoPath)).toBe(true);
+	});
+
+	it.each([
+		"recording-1720588800000.webm",
+		"recording-1720588800000.mp4",
+		"/home/user/.config/Recordly/recordings/recording-1788942955123.webm",
+		// A directory named "-webcam.mp4" must not disguise a screen recording.
+		"/home/user/-webcam.mp4/recording-1.webm",
+	])("does not mistake the screen capture for a webcam file: %s", (videoPath) => {
+		expect(isWebcamRecordingPath(videoPath)).toBe(false);
 	});
 });

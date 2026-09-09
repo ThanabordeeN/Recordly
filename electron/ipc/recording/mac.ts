@@ -32,6 +32,7 @@ import {
 import { emitRecordingInterrupted } from "./events";
 import { getFinalMacCompanionAudioPath } from "./macCompanionAudio";
 import { pruneAutoRecordings } from "./prune";
+import { isWebcamRecordingPath } from "./storagePath";
 
 export function waitForNativeCaptureStart(process: ChildProcessWithoutNullStreams) {
 	return new Promise<void>((resolve, reject) => {
@@ -262,13 +263,21 @@ export async function finalizeStoredVideo(videoPath: string) {
 		throw error;
 	}
 
-	snapshotCursorTelemetryForPersistence();
-	setCurrentVideoPath(videoPath);
-	setCurrentProjectPath(null);
-	try {
-		await persistPendingCursorTelemetry(videoPath);
-	} catch (error) {
-		console.warn("[mac-stop] Failed to persist cursor telemetry:", error);
+	// The webcam companion is stored through this same channel and, being much
+	// smaller, usually finishes first. Cursor telemetry belongs to the screen
+	// capture: attaching it to the webcam file (and clearing the pending buffer)
+	// leaves the editor with no sidecar for the video it actually plays, so the
+	// cursor never renders.
+	const isWebcamCompanion = isWebcamRecordingPath(videoPath);
+	if (!isWebcamCompanion) {
+		snapshotCursorTelemetryForPersistence();
+		setCurrentVideoPath(videoPath);
+		setCurrentProjectPath(null);
+		try {
+			await persistPendingCursorTelemetry(videoPath);
+		} catch (error) {
+			console.warn("[mac-stop] Failed to persist cursor telemetry:", error);
+		}
 	}
 	if (isAutoRecordingPath(videoPath)) {
 		await pruneAutoRecordings([videoPath]);
