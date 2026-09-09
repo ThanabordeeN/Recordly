@@ -42,7 +42,6 @@ describe("startWaylandCapture", () => {
 		});
 
 		helper.emitLine({ type: "status", state: "negotiating" });
-		expect(isWaylandCaptureActive()).toBe(false);
 
 		helper.emitLine({
 			type: "status",
@@ -50,7 +49,6 @@ describe("startWaylandCapture", () => {
 			nodeId: 94,
 			sourceType: 1,
 			cursorMode: "hidden",
-			restoreToken: "",
 			output: "/tmp/a.mp4",
 		});
 
@@ -59,7 +57,6 @@ describe("startWaylandCapture", () => {
 			outputPath: "/tmp/a.mp4",
 			nodeId: 94,
 		});
-		expect(isWaylandCaptureActive()).toBe(true);
 	});
 
 	it("asks the helper to hide the cursor and where to write", async () => {
@@ -76,7 +73,6 @@ describe("startWaylandCapture", () => {
 			nodeId: 1,
 			sourceType: 1,
 			cursorMode: "hidden",
-			restoreToken: "",
 			output: "/tmp/b.mp4",
 		});
 		await pending;
@@ -103,13 +99,11 @@ describe("startWaylandCapture", () => {
 			nodeId: 7,
 			sourceType: 2,
 			cursorMode: "hidden",
-			restoreToken: "tok",
 			output: "/tmp/c.mp4",
 		});
 
 		const result = await pending;
 		expect(result.success).toBe(false);
-		expect(isWaylandCaptureActive()).toBe(false);
 		expect(helper.kill).toHaveBeenCalled();
 	});
 
@@ -169,7 +163,6 @@ describe("stopWaylandCapture", () => {
 			nodeId: 2,
 			sourceType: 1,
 			cursorMode: "hidden",
-			restoreToken: "",
 			output: "/tmp/g.mp4",
 		});
 		await pending;
@@ -179,7 +172,6 @@ describe("stopWaylandCapture", () => {
 		helper.emit("close", 0);
 
 		await expect(stopping).resolves.toEqual({ success: true, outputPath: "/tmp/g.mp4" });
-		expect(isWaylandCaptureActive()).toBe(false);
 	});
 
 	it("is safe when nothing is running", async () => {

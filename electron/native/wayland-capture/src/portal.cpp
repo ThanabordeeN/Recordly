@@ -20,7 +20,6 @@ struct ResponseState {
 	bool received = false;
 	unsigned response = 0;
 	std::string sessionHandle;
-	std::string restoreToken;
 	unsigned nodeId = 0;
 	unsigned width = 0;
 	unsigned height = 0;
@@ -97,15 +96,6 @@ int onPortalResponse(sd_bus_message *message, void *userdata, sd_bus_error * /*e
 			if (value) {
 				state->sessionHandle = value;
 			}
-		} else if (name == "restore_token") {
-			const char *value = nullptr;
-			if (sd_bus_message_enter_container(message, 'v', "s") >= 0) {
-				sd_bus_message_read(message, "s", &value);
-				sd_bus_message_exit_container(message);
-			}
-			if (value) {
-				state->restoreToken = value;
-			}
 		} else if (name == "streams") {
 			sd_bus_message_enter_container(message, 'v', "a(ua{sv})");
 			sd_bus_message_enter_container(message, 'a', "(ua{sv})");
@@ -181,13 +171,11 @@ bool waitForResponse(sd_bus *bus, ResponseState *state, int timeoutSeconds) {
 }  // namespace
 
 bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceType,
-                          const std::string &restoreToken, PortalSession *out,
-                          PortalError *error) {
-	auto fail = [&](const std::string &message, unsigned response, bool mismatch = false) {
+                          PortalSession *out, PortalError *error) {
+	auto fail = [&](const std::string &message, unsigned response) {
 		if (error) {
 			error->message = message;
 			error->response = response;
-			error->restoreTokenMismatch = mismatch;
 		}
 		return false;
 	};
@@ -259,12 +247,6 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 	sd_bus_message_append(call, "{sv}", "types", "u", static_cast<unsigned>(sourceType));
 	sd_bus_message_append(call, "{sv}", "multiple", "b", 0);
 	sd_bus_message_append(call, "{sv}", "cursor_mode", "u", static_cast<unsigned>(cursorMode));
-	// persist_mode 2 asks the portal for a token so a later recording can skip
-	// the picker entirely.
-	sd_bus_message_append(call, "{sv}", "persist_mode", "u", 2u);
-	if (!restoreToken.empty()) {
-		sd_bus_message_append(call, "{sv}", "restore_token", "s", restoreToken.c_str());
-	}
 	sd_bus_message_close_container(call);
 	if (sd_bus_call(bus, call, 0, &busError, &reply) < 0) {
 		const std::string message = busError.message ? busError.message : "SelectSources failed";
@@ -315,10 +297,8 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 		return fail("the portal returned no capture stream", startState.response);
 	}
 
-	// A restore token replays whatever the earlier session picked, so it can
-	// hand back a window when a monitor was requested. Recording that would
-	// capture something the user never chose for this recording; refuse it and
-	// let the caller ask again without the token.
+	// The portal can hand back a source that is not what SelectSources asked
+	// for; recording that would capture something the user never chose.
 	if (startState.sourceType != 0 &&
 	    startState.sourceType != static_cast<unsigned>(sourceType)) {
 		const char *got = startState.sourceType == 2   ? "a window"
@@ -329,7 +309,7 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 		                   "Close", nullptr, nullptr, nullptr);
 		sd_bus_flush_close_unref(bus);
 		return fail(std::string("the portal returned ") + got + " instead of the requested source",
-		            startState.response, !restoreToken.empty());
+		            startState.response);
 	}
 
 	// ── OpenPipeWireRemote ───────────────────────────────────────────────────
@@ -364,7 +344,6 @@ bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceTy
 	out->pipewireFd = pipewireFd;
 	out->width = startState.width;
 	out->height = startState.height;
-	out->restoreToken = startState.restoreToken;
 	// Hold the connection: closing it here would make the portal destroy the
 	// session immediately and the PipeWire node would be gone before the
 	// pipeline ever attached to it.

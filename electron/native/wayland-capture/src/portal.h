@@ -34,7 +34,6 @@ struct PortalSession {
 	int pipewireFd = -1;
 	unsigned width = 0;
 	unsigned height = 0;
-	std::string restoreToken;
 	/**
 	 * The bus connection that owns the session.
 	 *
@@ -51,16 +50,13 @@ struct PortalError {
 	std::string message;
 	/** Portal response code: 0 ok, 1 user cancelled, 2 ended some other way. */
 	unsigned response = 0;
-	/** Set when a restore token produced a source we did not ask for. */
-	bool restoreTokenMismatch = false;
 };
 
 /**
  * Runs CreateSession -> SelectSources -> Start -> OpenPipeWireRemote.
  *
  * `Start` shows the compositor's screen picker, so this blocks until the user
- * chooses (or cancels). A `restoreToken` from an earlier session lets the
- * portal skip that dialog.
+ * chooses (or cancels).
  *
  * The returned stream is checked against `sourceType`: a restore token records
  * whatever the previous session selected, so a stale one can silently hand back
@@ -68,8 +64,7 @@ struct PortalError {
  * That mismatch is reported as an error rather than recorded.
  */
 bool portalOpenScreenCast(PortalCursorMode cursorMode, PortalSourceType sourceType,
-                          const std::string &restoreToken, PortalSession *out,
-                          PortalError *error);
+                          PortalSession *out, PortalError *error);
 
 /** Closes the session so the compositor stops streaming. */
 void portalCloseScreenCast(PortalSession *session);

@@ -7,14 +7,12 @@
  */
 export type WaylandCaptureEvent =
 	| { type: "status"; state: "negotiating" }
-	| { type: "status"; state: "restore-token-rejected"; reason: string }
 	| {
 			type: "status";
 			state: "recording";
 			nodeId: number;
 			sourceType: number;
 			cursorMode: WaylandCaptureCursorMode;
-			restoreToken: string;
 			output: string;
 	  }
 	| { type: "status"; state: "stopped"; exitCode: number; output: string }
@@ -71,13 +69,6 @@ export function parseWaylandCaptureLine(line: string): WaylandCaptureEvent | nul
 		case "negotiating":
 			return { type: "status", state: "negotiating" };
 
-		case "restore-token-rejected":
-			return {
-				type: "status",
-				state: "restore-token-rejected",
-				reason: typeof parsed.reason === "string" ? parsed.reason : "",
-			};
-
 		case "recording":
 			return {
 				type: "status",
@@ -85,7 +76,6 @@ export function parseWaylandCaptureLine(line: string): WaylandCaptureEvent | nul
 				nodeId: Math.max(0, Math.round(toFiniteNumber(parsed.nodeId, 0))),
 				sourceType: Math.max(0, Math.round(toFiniteNumber(parsed.sourceType, 0))),
 				cursorMode: normalizeCursorMode(parsed.cursorMode),
-				restoreToken: typeof parsed.restoreToken === "string" ? parsed.restoreToken : "",
 				output: typeof parsed.output === "string" ? parsed.output : "",
 			};
 
@@ -132,12 +122,4 @@ export function isAcceptableCaptureStart(
 	event: Extract<WaylandCaptureEvent, { state: "recording" }>,
 ): boolean {
 	return event.sourceType === PORTAL_SOURCE_TYPE_MONITOR;
-}
-
-export function describeWaylandCaptureExit(exitCode: number): string {
-	if (exitCode === 0) {
-		return "Capture finished.";
-	}
-
-	return WAYLAND_CAPTURE_EXIT_CODES[exitCode] ?? `Capture helper exited with code ${exitCode}.`;
 }

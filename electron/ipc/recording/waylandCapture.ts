@@ -3,8 +3,8 @@ import { getFfmpegBinaryPath } from "../ffmpeg/binary";
 import { getWaylandCaptureHelperPath } from "../paths/binaries";
 import {
 	consumeWaylandCaptureChunk,
-	describeWaylandCaptureExit,
 	isAcceptableCaptureStart,
+	WAYLAND_CAPTURE_EXIT_CODES,
 	type WaylandCaptureCursorMode,
 	type WaylandCaptureEvent,
 } from "./waylandCaptureProtocol";
@@ -30,13 +30,8 @@ export type WaylandCaptureHandle = {
 
 let activeCapture: WaylandCaptureHandle | null = null;
 
-export function getActiveWaylandCapture() {
-	return activeCapture;
-}
-
-export function isWaylandCaptureActive() {
-	return activeCapture !== null;
-}
+const describeExit = (code: number) =>
+	WAYLAND_CAPTURE_EXIT_CODES[code] ?? `Capture helper exited with code ${code}.`;
 
 /**
  * Starts the helper and resolves once it reports that it is recording.
@@ -55,7 +50,6 @@ export function startWaylandCapture(options: {
 	spawnHelper?: (helperPath: string, args: string[]) => ChildProcessWithoutNullStreams | null;
 	log?: (message: string) => void;
 	warn?: (message: string) => void;
-	ffmpegPath?: string;
 	helperPath?: string | null;
 }): Promise<WaylandCaptureStartResult> {
 	const log = options.log ?? console.log;
@@ -87,7 +81,7 @@ export function startWaylandCapture(options: {
 			"--fps",
 			String(options.frameRate ?? 60),
 			"--ffmpeg",
-			options.ffmpegPath ?? getFfmpegBinaryPath(),
+			getFfmpegBinaryPath(),
 		];
 
 		if (options.systemAudioDevice) {
@@ -149,13 +143,6 @@ export function startWaylandCapture(options: {
 					log("[WaylandCapture] waiting for the desktop portal…");
 					return;
 
-				case "restore-token-rejected":
-					warn(
-						`[WaylandCapture] Ignoring a saved screen selection: ${event.reason}. ` +
-							"Asking again so the recording captures what you pick now.",
-					);
-					return;
-
 				case "recording": {
 					if (!isAcceptableCaptureStart(event)) {
 						// Belt and braces: the helper refuses this too, but an
@@ -185,7 +172,7 @@ export function startWaylandCapture(options: {
 					if (!settled) {
 						settle({
 							success: false,
-							message: lastError || describeWaylandCaptureExit(event.exitCode),
+							message: lastError || describeExit(event.exitCode),
 						});
 					}
 					return;
@@ -218,7 +205,7 @@ export function startWaylandCapture(options: {
 			}
 			settle({
 				success: false,
-				message: lastError || describeWaylandCaptureExit(exitCode),
+				message: lastError || describeExit(exitCode),
 				cancelled: exitCode === 5,
 			});
 		});

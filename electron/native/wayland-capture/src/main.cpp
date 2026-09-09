@@ -17,7 +17,7 @@
 // Protocol (stdout, one JSON object per line):
 //   {"type":"status","state":"negotiating"}
 //   {"type":"status","state":"recording","nodeId":215,"width":2880,"height":1800,
-//    "restoreToken":"...","cursorMode":"hidden"}
+//    "cursorMode":"hidden"}
 //   {"type":"status","state":"stopped","exitCode":0,"output":"/path/file.mp4"}
 //   {"type":"error","message":"..."}
 
@@ -216,34 +216,21 @@ int main(int argc, char **argv) {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
 
 	std::string outputPath;
-	std::string restoreToken;
 	std::string ffmpegPath = "ffmpeg";
-	std::string gstPath = "gst-launch-1.0";
+	const std::string gstPath = "gst-launch-1.0";
 	PortalCursorMode cursorMode = PortalCursorMode::Hidden;
 	int frameRate = 60;
-	bool usePortalFd = false;
 	std::string systemAudioDevice;
 	std::string microphoneDevice;
 	std::string vaapiDevice;
-	(void)usePortalFd;
 
 	for (int i = 1; i < argc; i++) {
 		const std::string flag = argv[i];
 		const bool hasValue = i + 1 < argc;
 		if (flag == "--output" && hasValue) {
 			outputPath = argv[++i];
-		} else if (flag == "--restore-token" && hasValue) {
-			// Off by default on purpose. A token replays whatever the portal
-			// last associated with it, and in testing that included a source
-			// whose geometry matched no connected monitor even though the
-			// portal still reported source_type=MONITOR. Showing the picker
-			// costs one click and is exactly what Recordly does today, so the
-			// token is only worth using once we can verify what came back.
-			restoreToken = argv[++i];
 		} else if (flag == "--ffmpeg" && hasValue) {
 			ffmpegPath = argv[++i];
-		} else if (flag == "--gst-launch" && hasValue) {
-			gstPath = argv[++i];
 		} else if (flag == "--vaapi-device" && hasValue) {
 			// A DRM render node, e.g. /dev/dri/renderD128. Only useful with an
 			// ffmpeg built with VAAPI; the caller checks that first.
@@ -253,9 +240,6 @@ int main(int argc, char **argv) {
 			systemAudioDevice = argv[++i];
 		} else if (flag == "--microphone" && hasValue) {
 			microphoneDevice = argv[++i];
-		} else if (flag == "--portal-fd") {
-			// Kept only so older callers do not fail; this is now the only route.
-			usePortalFd = true;
 		} else if (flag == "--fps" && hasValue) {
 			frameRate = atoi(argv[++i]);
 		} else if (flag == "--cursor-mode" && hasValue) {
@@ -297,24 +281,9 @@ int main(int argc, char **argv) {
 	// them -- Y4M carries the real dimensions to ffmpeg.
 	PortalSession session;
 	PortalError portalError;
-	if (!portalOpenScreenCast(cursorMode, PortalSourceType::Monitor, restoreToken, &session,
-	                          &portalError)) {
-		// A stale restore token can replay a source the user picked for some
-		// other app; drop it and ask again rather than recording the wrong
-		// thing or failing outright.
-		if (portalError.restoreTokenMismatch) {
-			emitLine("{\"type\":\"status\",\"state\":\"restore-token-rejected\",\"reason\":\"" +
-			         jsonEscape(portalError.message) +
-			         "\",\"timestamp\":" + std::to_string(nowMs()) + "}");
-			if (!portalOpenScreenCast(cursorMode, PortalSourceType::Monitor, "", &session,
-			                          &portalError)) {
-				emitError(portalError.message);
-				return portalError.response == 1 ? 5 : 4;
-			}
-		} else {
-			emitError(portalError.message);
-			return portalError.response == 1 ? 5 : 4;
-		}
+	if (!portalOpenScreenCast(cursorMode, PortalSourceType::Monitor, &session, &portalError)) {
+		emitError(portalError.message);
+		return portalError.response == 1 ? 5 : 4;
 	}
 
 	// The portal descriptor is handed to GStreamer as fd 3 so pipewiresrc talks
@@ -619,13 +588,12 @@ int main(int argc, char **argv) {
 		snprintf(buf, sizeof(buf),
 		         "{\"type\":\"status\",\"state\":\"recording\",\"nodeId\":%u,\"width\":%u,"
 		         "\"height\":%u,\"sourceType\":%u,\"cursorMode\":\"%s\","
-		         "\"restoreToken\":\"%s\",\"output\":\"%s\",\"timestamp\":%lld}",
+		         "\"output\":\"%s\",\"timestamp\":%lld}",
 		         session.nodeId, session.width, session.height, session.sourceType,
 		         cursorMode == PortalCursorMode::Hidden     ? "hidden"
 		         : cursorMode == PortalCursorMode::Embedded ? "embedded"
 		                                                    : "metadata",
-		         jsonEscape(session.restoreToken).c_str(), jsonEscape(outputPath).c_str(),
-		         nowMs());
+		         jsonEscape(outputPath).c_str(), nowMs());
 		emitLine(buf);
 	}
 

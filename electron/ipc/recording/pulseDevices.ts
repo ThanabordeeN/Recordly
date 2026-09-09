@@ -74,19 +74,15 @@ export function matchPulseSourceByLabel(
 	return exact?.name ?? null;
 }
 
-export async function resolvePulseSourceName(
-	label: string | undefined,
-	options?: { listSources?: () => Promise<string> },
-): Promise<string | null> {
+export async function resolvePulseSourceName(label: string | undefined): Promise<string | null> {
 	if (!label?.trim()) {
 		return null;
 	}
 
 	try {
-		const raw = options?.listSources
-			? await options.listSources()
-			: (await execFileAsync("pactl", ["-f", "json", "list", "sources"], { timeout: 5000 }))
-					.stdout;
+		const { stdout: raw } = await execFileAsync("pactl", ["-f", "json", "list", "sources"], {
+			timeout: 5000,
+		});
 		return matchPulseSourceByLabel(parsePulseSources(raw), label);
 	} catch {
 		// pactl missing or failing is not an error worth surfacing: the caller

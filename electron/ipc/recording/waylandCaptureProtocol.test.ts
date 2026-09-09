@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
 	consumeWaylandCaptureChunk,
-	describeWaylandCaptureExit,
 	isAcceptableCaptureStart,
 	parseWaylandCaptureLine,
 } from "./waylandCaptureProtocol";
@@ -11,7 +10,7 @@ describe("parseWaylandCaptureLine", () => {
 		expect(
 			parseWaylandCaptureLine(
 				'{"type":"status","state":"recording","nodeId":94,"width":1646,"height":1029,' +
-					'"sourceType":1,"cursorMode":"hidden","restoreToken":"tok","output":"/tmp/a.mp4"}',
+					'"sourceType":1,"cursorMode":"hidden","output":"/tmp/a.mp4"}',
 			),
 		).toEqual({
 			type: "status",
@@ -19,7 +18,6 @@ describe("parseWaylandCaptureLine", () => {
 			nodeId: 94,
 			sourceType: 1,
 			cursorMode: "hidden",
-			restoreToken: "tok",
 			output: "/tmp/a.mp4",
 		});
 	});
@@ -39,18 +37,6 @@ describe("parseWaylandCaptureLine", () => {
 		expect(parseWaylandCaptureLine('{"type":"error","message":"nope"}')).toEqual({
 			type: "error",
 			message: "nope",
-		});
-	});
-
-	it("surfaces a rejected restore token", () => {
-		expect(
-			parseWaylandCaptureLine(
-				'{"type":"status","state":"restore-token-rejected","reason":"returned a window"}',
-			),
-		).toEqual({
-			type: "status",
-			state: "restore-token-rejected",
-			reason: "returned a window",
 		});
 	});
 
@@ -89,7 +75,6 @@ describe("isAcceptableCaptureStart", () => {
 		state: "recording",
 		nodeId: 1,
 		cursorMode: "hidden",
-		restoreToken: "",
 		output: "/tmp/a.mp4",
 	} as const;
 
@@ -103,14 +88,5 @@ describe("isAcceptableCaptureStart", () => {
 		expect(isAcceptableCaptureStart({ ...base, sourceType: 2 })).toBe(false);
 		expect(isAcceptableCaptureStart({ ...base, sourceType: 4 })).toBe(false);
 		expect(isAcceptableCaptureStart({ ...base, sourceType: 0 })).toBe(false);
-	});
-});
-
-describe("describeWaylandCaptureExit", () => {
-	it("explains the documented exit codes", () => {
-		expect(describeWaylandCaptureExit(0)).toContain("finished");
-		expect(describeWaylandCaptureExit(5)).toContain("cancelled");
-		expect(describeWaylandCaptureExit(7)).toContain("pipewiresrc");
-		expect(describeWaylandCaptureExit(99)).toContain("99");
 	});
 });

@@ -383,6 +383,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [microphoneEnabled, setMicrophoneEnabled] = useState(false);
 	const [microphoneDeviceId, setMicrophoneDeviceId] = useState<string | undefined>(undefined);
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
+	const cursorFreeCaptureEnabled = useRef(true);
 	const [webcamEnabled, setWebcamEnabled] = useState(false);
 	const [webcamDeviceId, setWebcamDeviceId] = useState<string | undefined>(undefined);
 	const [countdownDelay, setCountdownDelayState] = useState(3);
@@ -1571,6 +1572,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					setMicrophoneDeviceId(result.microphoneDeviceId);
 				}
 				setSystemAudioEnabled(result.systemAudioEnabled);
+				cursorFreeCaptureEnabled.current = result.cursorFreeCaptureEnabled !== false;
 				setWebcamEnabled(result.webcamEnabled);
 				if (result.webcamDeviceId) {
 					setWebcamDeviceId(result.webcamDeviceId);
@@ -1753,6 +1755,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (!useNativeCapture) {
 				try {
 					const decision = await window.electronAPI.evaluateWaylandCapture({
+						enabled: cursorFreeCaptureEnabled.current,
 						capturesSystemAudio: systemAudioEnabled,
 						capturesMicrophone: microphoneEnabled,
 						usesNonDefaultMicrophone: Boolean(microphoneDeviceId),
@@ -1763,6 +1766,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					});
 
 					if (decision.use) {
+						// The compositor takes a few seconds to start streaming;
+						// startWaylandCapture only resolves once frames are
+						// actually flowing, so show the busy state until then.
+						setFinalizing(true);
 						const timestamp = recordingSessionTimestamp.current ?? Date.now();
 						const started = await window.electronAPI.startWaylandCapture({
 							fileName: `${RECORDING_FILE_PREFIX}${timestamp}.mp4`,
@@ -1772,6 +1779,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							microphoneLabel: micLabel,
 						});
 
+						setFinalizing(false);
 						if (started.success) {
 							if (startWasCancelled()) {
 								await window.electronAPI.stopWaylandCapture();

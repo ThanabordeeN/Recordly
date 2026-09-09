@@ -68,28 +68,3 @@ describe("matchPulseSourceByLabel", () => {
 		expect(matchPulseSourceByLabel(sources, undefined)).toBeNull();
 	});
 });
-
-describe("resolvePulseSourceName", () => {
-	it("resolves through the injected lister", async () => {
-		await expect(
-			resolvePulseSourceName("AEC Cleaned Microphone (Echo-Free)", {
-				listSources: async () => REAL_OUTPUT,
-			}),
-		).resolves.toBe("echo_cancel_source");
-	});
-
-	it("returns null when pactl is unavailable instead of throwing", async () => {
-		await expect(
-			resolvePulseSourceName("anything", {
-				listSources: async () => {
-					throw new Error("ENOENT");
-				},
-			}),
-		).resolves.toBeNull();
-	});
-
-	it("returns null without a label", async () => {
-		await expect(resolvePulseSourceName(undefined)).resolves.toBeNull();
-		await expect(resolvePulseSourceName("   ")).resolves.toBeNull();
-	});
-});

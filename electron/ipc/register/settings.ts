@@ -134,6 +134,9 @@ export function registerSettingsHandlers() {
 				webcamEnabled: parsed.webcamEnabled === true,
 				webcamDeviceId:
 					typeof parsed.webcamDeviceId === "string" ? parsed.webcamDeviceId : undefined,
+				// Defaults on: it removes a duplicate cursor from the video and
+				// falls back to the browser path wherever it does not apply.
+				cursorFreeCaptureEnabled: parsed.cursorFreeCaptureEnabled !== false,
 			};
 		} catch {
 			return {
@@ -143,6 +146,7 @@ export function registerSettingsHandlers() {
 				systemAudioEnabled: false,
 				webcamEnabled: false,
 				webcamDeviceId: undefined,
+				cursorFreeCaptureEnabled: true,
 			};
 		}
 	});

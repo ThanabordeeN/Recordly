@@ -7,6 +7,8 @@ export interface RecordingPreferencesPatch {
 	systemAudioEnabled?: boolean;
 	webcamEnabled?: boolean;
 	webcamDeviceId?: string;
+	/** Record without the system cursor burned into the frames (KDE Wayland). */
+	cursorFreeCaptureEnabled?: boolean;
 }
 
 export function createRecordingPreferencesStore(filePath: string) {
