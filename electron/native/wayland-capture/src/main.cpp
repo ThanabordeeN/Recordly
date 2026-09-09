@@ -369,6 +369,12 @@ int main(int argc, char **argv) {
 		// system clock instead makes the timestamps match the wall clock.
 		"provide-clock=false",
 		"!",
+		// pipewiresrc negotiates the display's refresh rate (120/1 here) while
+		// delivering roughly half that, so every timestamp downstream ran at
+		// half speed and a 22 s recording came out as 11 s. Declaring the
+		// stream variable-rate stops anything inferring a rate from the caps.
+		"video/x-raw,framerate=0/1",
+		"!",
 		"videoconvert",
 		"!",
 		// A compositor only emits a frame when something is damaged, and with
