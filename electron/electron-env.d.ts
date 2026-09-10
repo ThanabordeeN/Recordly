@@ -199,6 +199,8 @@ interface Window {
 	electronAPI: {
 		hudOverlaySetIgnoreMouse: (ignore: boolean) => void;
 		hudOverlaySetSourceSelectionActive: (active: boolean) => void;
+		hudOverlaySetPopoverActive: (active: boolean) => void;
+		hudOverlaySetContentWidth: (width: number) => void;
 		hudOverlayDrag: (phase: "start" | "move" | "end", screenX: number, screenY: number) => void;
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
@@ -847,7 +849,9 @@ interface Window {
 			usesNonDefaultMicrophone?: boolean;
 			microphoneLabel?: string;
 			sourceId?: string | null;
-		}) => Promise<{ use: true } | { use: false; reason: string; message: string }>;
+		}) => Promise<
+			{ use: true } | { use: false; reason: string; message: string; fatal: boolean }
+		>;
 		startWaylandCapture: (request: {
 			fileName?: string;
 			frameRate?: number;
@@ -859,8 +863,10 @@ interface Window {
 			path?: string;
 			message?: string;
 			cancelled?: boolean;
+			startedAtMs?: number;
 		}>;
-		setWaylandCapturePaused: (paused: boolean) => Promise<{ success: boolean }>;
+		onWaylandCaptureStarted: (callback: (event: { fileName: string; startedAtMs: number }) => void) => () => void;
+		setWaylandCapturePaused: (paused: boolean) => Promise<{ success: boolean; timestamp?: number }>;
 		stopWaylandCapture: () => Promise<{
 			success: boolean;
 			path?: string;

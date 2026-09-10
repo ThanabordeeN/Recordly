@@ -1583,9 +1583,9 @@ export function registerRecordingHandlers(
 	});
 
 	// ── Cursor-free Wayland capture ──────────────────────────────────────────
-	// Opt-in, video only, and it never replaces the browser path on its own:
-	// decideWaylandCapture() says whether this recording qualifies and why not
-	// when it does not, so the caller can fall back with a reason to show.
+	// Cursor-free capture is selected from the stored user preference. When it
+	// is applicable but cannot honor the request, the renderer surfaces the
+	// decision as an error instead of silently recording a visible cursor.
 	ipcMain.handle(
 		"evaluate-wayland-capture",
 		async (
@@ -1599,9 +1599,8 @@ export function registerRecordingHandlers(
 				sourceId?: string | null;
 			} = {},
 		) => {
-			// A specific microphone is only a blocker when its PulseAudio source
-			// cannot be found; otherwise the helper can record exactly the input
-			// the user chose.
+			// Resolve a selected browser device to its PulseAudio source before the
+			// helper starts; never silently substitute the system default.
 			const resolvedMicrophone =
 				request.usesNonDefaultMicrophone === true
 					? await resolvePulseSourceName(request.microphoneLabel)
@@ -1609,8 +1608,8 @@ export function registerRecordingHandlers(
 
 			const input = {
 				cursorBackend,
-				// Opt-in through the environment for now: the browser path stays
-				// the default until this has had real use.
+				// The renderer supplies the stored preference. Keep the environment
+				// switch as a compatibility override for diagnostics and old builds.
 				enabled: request.enabled === true || process.env.RECORDLY_WAYLAND_CAPTURE === "1",
 				isHelperAvailable: isWaylandCaptureHelperAvailable(),
 				capturesSystemAudio: request.capturesSystemAudio === true,
@@ -1628,7 +1627,11 @@ export function registerRecordingHandlers(
 				console.log("[WaylandCapture] using cursor-free capture for this recording.");
 			} else {
 				console.log(
-					`[WaylandCapture] using the browser path (${decision.reason}): ${decision.message}`,
+					`[WaylandCapture] ${
+						decision.fatal
+							? "cannot start cursor-free capture"
+							: "using the browser path"
+					} (${decision.reason}): ${decision.message}`,
 				);
 				console.log(
 					`[WaylandCapture] inputs: ${JSON.stringify({
@@ -1645,7 +1648,7 @@ export function registerRecordingHandlers(
 	ipcMain.handle(
 		"start-wayland-capture",
 		async (
-			_,
+			event,
 			request: {
 				fileName?: string;
 				frameRate?: number;
@@ -1663,6 +1666,10 @@ export function registerRecordingHandlers(
 
 				const result = await startWaylandCapture({
 					outputPath,
+					onCaptureStarted: (boundary) => {
+						updateRecordingState(true, boundary.startedAtMs);
+						event.sender.send("wayland-capture-started", { fileName: path.basename(outputPath), startedAtMs: boundary.startedAtMs });
+					},
 					cursorMode: "hidden",
 					frameRate: request.frameRate ?? 60,
 					// PulseAudio resolves these aliases itself, so no external
@@ -1676,6 +1683,7 @@ export function registerRecordingHandlers(
 				});
 
 				if (!result.success) {
+					updateRecordingState(false);
 					return {
 						success: false,
 						message: result.message,
@@ -1684,8 +1692,9 @@ export function registerRecordingHandlers(
 				}
 
 				setCurrentVideoPath(result.outputPath);
-				return { success: true, path: result.outputPath };
+				return { success: true, path: result.outputPath, startedAtMs: result.startedAtMs };
 			} catch (error) {
+				updateRecordingState(false);
 				console.error("Failed to start Wayland capture:", error);
 				return { success: false, message: String(error) };
 			}
@@ -1693,13 +1702,21 @@ export function registerRecordingHandlers(
 	);
 
 	ipcMain.handle("set-wayland-capture-paused", (_, paused: unknown) => {
-		return { success: setWaylandCapturePaused(paused === true) };
+		return setWaylandCapturePaused(paused === true);
 	});
 
 	ipcMain.handle("stop-wayland-capture", async () => {
+		updateRecordingState(false);
 		const result = await stopWaylandCapture();
 		if (!result.outputPath) {
 			return { success: false, message: "No Wayland capture was running" };
+		}
+		if (!result.success) {
+			return {
+				success: false,
+				path: result.outputPath,
+				message: "The Wayland capture helper could not finish successfully",
+			};
 		}
 
 		// The browser path gets this for free through finalizeStoredVideo(); this
@@ -2020,7 +2037,7 @@ export function registerRecordingHandlers(
 		}
 	});
 
-	ipcMain.handle("set-recording-state", (_, recording: boolean) => {
+	function updateRecordingState(recording: boolean, startedAtMs = Date.now()) {
 		if (recording) {
 			stopCursorCapture();
 			stopInteractionCapture();
@@ -2030,7 +2047,7 @@ export function registerRecordingHandlers(
 			setIsCursorCaptureActive(true);
 			setActiveCursorSamples([]);
 			setPendingCursorSamples([]);
-			setCursorCaptureStartTimeMs(Date.now());
+			setCursorCaptureStartTimeMs(startedAtMs);
 			resetCursorCaptureClock();
 			setLinuxCursorScreenPoint(null);
 			setLastLeftClick(null);
@@ -2069,7 +2086,8 @@ export function registerRecordingHandlers(
 		if (onRecordingStateChange) {
 			onRecordingStateChange(recording, source.name);
 		}
-	});
+	}
+	ipcMain.handle("set-recording-state", (_, recording: boolean) => updateRecordingState(recording));
 
 	ipcMain.handle("pause-cursor-capture", (_, pausedAtMs?: unknown) => {
 		pauseCursorCaptureAtBoundary(normalizeRendererTimestampMs(pausedAtMs));

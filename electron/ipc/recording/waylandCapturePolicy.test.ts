@@ -29,10 +29,10 @@ describe("decideWaylandCapture", () => {
 		});
 	});
 
-	it("explains a missing helper rather than failing the recording", () => {
+	it("marks a missing helper as fatal instead of falling back with a cursor", () => {
 		const decision = decideWaylandCapture({ ...base, isHelperAvailable: false });
-		expect(decision).toMatchObject({ use: false, reason: "helper-missing" });
-		expect((decision as { message: string }).message).toContain("browser path");
+		expect(decision).toMatchObject({ use: false, reason: "helper-missing", fatal: true });
+		expect((decision as { message: string }).message).toContain("cannot be excluded");
 	});
 
 	it("records audio itself, so audio alone does not force a fallback", () => {
@@ -40,7 +40,7 @@ describe("decideWaylandCapture", () => {
 		expect(decideWaylandCapture({ ...base, capturesMicrophone: true })).toEqual({ use: true });
 	});
 
-	it("defers when a specific microphone was chosen", () => {
+	it("marks an unmappable specific microphone as fatal", () => {
 		// PulseAudio source names do not map to the browser device ids Recordly
 		// selects with, so recording the default mic instead would be silently
 		// capturing the wrong input.
@@ -50,14 +50,25 @@ describe("decideWaylandCapture", () => {
 				capturesMicrophone: true,
 				usesNonDefaultMicrophone: true,
 			}),
-		).toMatchObject({ use: false, reason: "specific-microphone" });
+		).toMatchObject({ use: false, reason: "specific-microphone", fatal: true });
 	});
 
-	it("refuses a window source", () => {
+	it("marks a window source as fatal instead of silently restoring the cursor", () => {
 		expect(decideWaylandCapture({ ...base, sourceId: "window:42" })).toMatchObject({
 			use: false,
 			reason: "window-source",
+			fatal: true,
 		});
+	});
+
+	it("keeps non-KDE sessions on their existing browser path", () => {
+		expect(decideWaylandCapture({ ...base, cursorBackend: "linux-x11-uiohook" })).toMatchObject(
+			{
+				use: false,
+				reason: "not-kde-wayland",
+				fatal: false,
+			},
+		);
 	});
 
 	it("accepts a screen source id that is not the portal sentinel", () => {

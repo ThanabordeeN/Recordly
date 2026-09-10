@@ -5,17 +5,39 @@
  * ask for `cursor_mode=hidden`, which Chromium's getDisplayMedia cannot express
  * (see electron/native/wayland-capture/src/main.cpp for the evidence).
  */
+export type WaylandCaptureStarted = {
+	type: "status";
+	state: "capture-started";
+	protocolVersion: 2;
+	startedAtMs: number;
+	timestamp: number;
+	output: string;
+};
+
+export type WaylandCaptureBoundary = {
+	type: "status";
+	state: "paused" | "resumed";
+	timestamp: number;
+	mediaTimeUs: number;
+	output: string;
+};
+
 export type WaylandCaptureEvent =
+	| WaylandCaptureStarted
+	| WaylandCaptureBoundary
 	| { type: "status"; state: "negotiating" }
 	| {
 			type: "status";
 			state: "recording";
+			protocolVersion?: 2;
+			startedAtMs?: number;
+			timestamp?: number;
 			nodeId: number;
 			sourceType: number;
 			cursorMode: WaylandCaptureCursorMode;
 			output: string;
 	  }
-	| { type: "status"; state: "stopped"; exitCode: number; output: string }
+	| { type: "status"; state: "stopped"; exitCode: number; output: string; stoppedAtMs?: number; durationMs?: number }
 	| { type: "error"; message: string };
 
 export type WaylandCaptureCursorMode = "hidden" | "embedded" | "metadata";
@@ -35,6 +57,10 @@ export const WAYLAND_CAPTURE_EXIT_CODES: Record<number, string> = {
 function toFiniteNumber(value: unknown, fallback: number): number {
 	const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
 	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function validTime(value: unknown): value is number {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function normalizeCursorMode(value: unknown): WaylandCaptureCursorMode {
@@ -69,8 +95,19 @@ export function parseWaylandCaptureLine(line: string): WaylandCaptureEvent | nul
 		case "negotiating":
 			return { type: "status", state: "negotiating" };
 
+		case "capture-started":
+			if (parsed.protocolVersion !== 2 || !validTime(parsed.startedAtMs) || !validTime(parsed.timestamp) || parsed.startedAtMs > parsed.timestamp || typeof parsed.output !== "string" || !parsed.output) return null;
+			return { type: "status", state: "capture-started", protocolVersion: 2, startedAtMs: parsed.startedAtMs, timestamp: parsed.timestamp, output: parsed.output };
+
+		case "paused":
+		case "resumed":
+			if (parsed.protocolVersion !== 2 || !validTime(parsed.timestamp) || !validTime(parsed.mediaTimeUs) || typeof parsed.output !== "string") return null;
+			return { type: "status", state: parsed.state, timestamp: parsed.timestamp, mediaTimeUs: parsed.mediaTimeUs, output: parsed.output };
+
 		case "recording":
 			return {
+				...(parsed.protocolVersion === 2 && validTime(parsed.startedAtMs) && validTime(parsed.timestamp) && parsed.startedAtMs <= parsed.timestamp
+					? { protocolVersion: 2 as const, startedAtMs: parsed.startedAtMs, timestamp: parsed.timestamp } : {}),
 				type: "status",
 				state: "recording",
 				nodeId: Math.max(0, Math.round(toFiniteNumber(parsed.nodeId, 0))),
@@ -81,6 +118,7 @@ export function parseWaylandCaptureLine(line: string): WaylandCaptureEvent | nul
 
 		case "stopped":
 			return {
+				...(validTime(parsed.stoppedAtMs) && validTime(parsed.durationMs) ? { stoppedAtMs: parsed.stoppedAtMs, durationMs: parsed.durationMs } : {}),
 				type: "status",
 				state: "stopped",
 				exitCode: Math.round(toFiniteNumber(parsed.exitCode, -1)),

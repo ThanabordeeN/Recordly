@@ -7,6 +7,7 @@ import {
 	WAYLAND_CAPTURE_EXIT_CODES,
 	type WaylandCaptureCursorMode,
 	type WaylandCaptureEvent,
+	type WaylandCaptureStarted,
 } from "./waylandCaptureProtocol";
 
 /**
@@ -20,12 +21,14 @@ import {
  */
 
 export type WaylandCaptureStartResult =
-	| { success: true; outputPath: string; nodeId: number }
+	| { success: true; outputPath: string; nodeId: number; startedAtMs: number }
 	| { success: false; message: string; cancelled?: boolean };
 
 export type WaylandCaptureHandle = {
 	process: ChildProcessWithoutNullStreams;
 	outputPath: string;
+	failed?: boolean;
+	pendingBoundary?: { state: "paused" | "resumed"; finish: (result: { success: boolean; timestamp?: number }) => void };
 };
 
 let activeCapture: WaylandCaptureHandle | null = null;
@@ -47,6 +50,7 @@ export function startWaylandCapture(options: {
 	systemAudioDevice?: string;
 	/** PulseAudio source for the microphone, normally "default". */
 	microphoneDevice?: string;
+	onCaptureStarted?: (event: WaylandCaptureStarted) => void;
 	spawnHelper?: (helperPath: string, args: string[]) => ChildProcessWithoutNullStreams | null;
 	log?: (message: string) => void;
 	warn?: (message: string) => void;
@@ -111,6 +115,9 @@ export function startWaylandCapture(options: {
 			return;
 		}
 
+		const capture: WaylandCaptureHandle = { process: helper, outputPath: options.outputPath };
+		activeCapture = capture;
+		let startedAtMs: number | null = null;
 		let settled = false;
 		let buffer = "";
 		let lastError = "";
@@ -121,7 +128,8 @@ export function startWaylandCapture(options: {
 			}
 			settled = true;
 			if (!result.success) {
-				activeCapture = null;
+				if (activeCapture === capture) activeCapture = null;
+				capture.pendingBoundary?.finish({ success: false });
 				try {
 					helper?.kill("SIGTERM");
 				} catch {
@@ -134,7 +142,10 @@ export function startWaylandCapture(options: {
 		const applyEvent = (event: WaylandCaptureEvent) => {
 			if (event.type === "error") {
 				lastError = event.message;
+				if (activeCapture?.process === helper) activeCapture.failed = true;
 				warn(`[WaylandCapture] ${event.message}`);
+				capture.pendingBoundary?.finish({ success: false });
+				settle({ success: false, message: event.message });
 				return;
 			}
 
@@ -143,7 +154,30 @@ export function startWaylandCapture(options: {
 					log("[WaylandCapture] waiting for the desktop portal…");
 					return;
 
+				case "capture-started":
+					if (settled || startedAtMs !== null) return;
+					if (event.output !== options.outputPath) {
+						settle({ success: false, message: "Capture helper returned a different output path." });
+						return;
+					}
+					startedAtMs = event.startedAtMs;
+					try { options.onCaptureStarted?.(event); }
+					catch (error) { settle({ success: false, message: String(error) }); }
+					return;
+
+				case "paused":
+				case "resumed":
+					if (event.output === capture.outputPath && capture.pendingBoundary?.state === event.state) {
+						capture.pendingBoundary.finish({ success: true, timestamp: event.timestamp });
+					}
+					return;
+
 				case "recording": {
+					if (settled) return;
+					if (startedAtMs === null || event.protocolVersion !== 2 || event.startedAtMs !== startedAtMs || event.output !== options.outputPath) {
+						settle({ success: false, message: "The Wayland helper did not provide a valid first-sample timeline. Rebuild the helper." });
+						return;
+					}
 					if (!isAcceptableCaptureStart(event)) {
 						// Belt and braces: the helper refuses this too, but an
 						// older helper must never be allowed to record a window
@@ -157,18 +191,17 @@ export function startWaylandCapture(options: {
 						return;
 					}
 
-					activeCapture = {
-						process: helper as ChildProcessWithoutNullStreams,
-						outputPath: event.output,
-					};
 					log(
 						`[WaylandCapture] recording node ${event.nodeId} with the cursor ${event.cursorMode}`,
 					);
-					settle({ success: true, outputPath: event.output, nodeId: event.nodeId });
+					settle({ success: true, outputPath: event.output, nodeId: event.nodeId, startedAtMs });
 					return;
 				}
 
 				case "stopped":
+					if (event.exitCode !== 0 && activeCapture?.process === helper) {
+						activeCapture.failed = true;
+					}
 					if (!settled) {
 						settle({
 							success: false,
@@ -194,11 +227,19 @@ export function startWaylandCapture(options: {
 			}
 		});
 
+		helper.stdin?.on?.("error", () => {
+			capture.failed = true;
+			capture.pendingBoundary?.finish({ success: false });
+			settle({ success: false, message: "The Wayland helper command pipe failed." });
+		});
 		helper.once("error", (error) => {
+			capture.failed = true;
+			capture.pendingBoundary?.finish({ success: false });
 			settle({ success: false, message: `Wayland capture helper error: ${String(error)}` });
 		});
 
 		helper.once("close", (code) => {
+			capture.pendingBoundary?.finish({ success: false });
 			const exitCode = typeof code === "number" ? code : -1;
 			if (activeCapture?.process === helper) {
 				activeCapture = null;
@@ -218,17 +259,20 @@ export function startWaylandCapture(options: {
  * The paused stretch produces no frames and therefore vanishes from the
  * finished video, which matches how a paused recording is expected to behave.
  */
-export function setWaylandCapturePaused(paused: boolean): boolean {
-	if (!activeCapture) {
-		return false;
-	}
-
-	try {
-		activeCapture.process.stdin?.write(paused ? "pause\n" : "resume\n");
-		return true;
-	} catch {
-		return false;
-	}
+export function setWaylandCapturePaused(paused: boolean): Promise<{ success: boolean; timestamp?: number }> {
+	const capture = activeCapture;
+	if (!capture || capture.failed || capture.pendingBoundary) return Promise.resolve({ success: false });
+	return new Promise((resolve) => {
+		const timeout = setTimeout(() => finish({ success: false }), 3000);
+		const finish = (result: { success: boolean; timestamp?: number }) => {
+			clearTimeout(timeout);
+			capture.pendingBoundary = undefined;
+			resolve(result);
+		};
+		capture.pendingBoundary = { state: paused ? "paused" : "resumed", finish };
+		try { capture.process.stdin.write(paused ? "pause\n" : "resume\n"); }
+		catch { finish({ success: false }); }
+	});
 }
 
 /**
@@ -243,7 +287,6 @@ export function stopWaylandCapture(options?: {
 }): Promise<{ success: boolean; outputPath: string | null }> {
 	const warn = options?.warn ?? console.warn;
 	const capture = activeCapture;
-	activeCapture = null;
 
 	if (!capture) {
 		return Promise.resolve({ success: false, outputPath: null });
@@ -256,6 +299,7 @@ export function stopWaylandCapture(options?: {
 				return;
 			}
 			done = true;
+			if (activeCapture === capture) activeCapture = null;
 			resolve({ success, outputPath: capture.outputPath });
 		};
 
@@ -269,21 +313,21 @@ export function stopWaylandCapture(options?: {
 			finish(false);
 		}, options?.timeoutMs ?? 20000);
 
-		capture.process.once("close", () => {
+		capture.process.once("close", (code) => {
 			clearTimeout(timeout);
-			finish(true);
+			finish(code === 0 && !capture.failed);
 		});
 
 		try {
 			capture.process.stdin?.write("stop\n");
 			capture.process.stdin?.end();
 		} catch {
-			// pipe already closed
-		}
-		try {
-			capture.process.kill("SIGTERM");
-		} catch {
-			// already gone
+			// Use the helper's signal handler only if the command pipe failed.
+			try {
+				capture.process.kill("SIGTERM");
+			} catch {
+				// already gone; close/timeout determines the result
+			}
 		}
 	});
 }

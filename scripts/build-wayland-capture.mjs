@@ -26,13 +26,18 @@ function run(command, args, options = {}) {
 	execFileSync(command, args, { stdio: "inherit", timeout: 300000, ...options });
 }
 
-function hasLibsystemdHeaders() {
-	try {
-		execFileSync("pkg-config", ["--exists", "libsystemd"], { stdio: "ignore" });
-		return true;
-	} catch {
-		return false;
-	}
+/** The helper links sd-bus for the portal and GStreamer for acquisition. */
+const requiredModules = ["libsystemd", "gstreamer-1.0", "gstreamer-app-1.0"];
+
+function missingHeaders() {
+	return requiredModules.filter((module) => {
+		try {
+			execFileSync("pkg-config", ["--exists", module], { stdio: "ignore" });
+			return false;
+		} catch {
+			return true;
+		}
+	});
 }
 
 function reuseBundledBinary(reason) {
@@ -40,7 +45,7 @@ function reuseBundledBinary(reason) {
 		console.error(`${prefix} ${reason}`);
 		console.error(
 			`${prefix} Install the build dependencies on Fedora with:\n` +
-				`${prefix}   sudo dnf install cmake gcc-c++ systemd-devel`,
+				`${prefix}   sudo dnf install cmake gcc-c++ systemd-devel gstreamer1-devel gstreamer1-plugins-base-devel`,
 		);
 		process.exit(1);
 	}
@@ -55,8 +60,9 @@ try {
 	reuseBundledBinary("CMake is not installed.");
 }
 
-if (!hasLibsystemdHeaders()) {
-	reuseBundledBinary("libsystemd development headers are not installed.");
+const missing = missingHeaders();
+if (missing.length > 0) {
+	reuseBundledBinary(`Development headers are missing: ${missing.join(", ")}.`);
 }
 
 console.log(`${prefix} Configuring CMake...`);

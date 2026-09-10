@@ -258,14 +258,13 @@ RECORDLY_CURSOR_BACKEND=linux-kde-wayland npm run dev
 ## HUD behaviour and known limitations
 
 - **HUD positioning.** Wayland forbids client-side window placement, so
-  `BrowserWindow.setBounds()` x/y is silently ignored. Recordly already handles
-  this: on Linux the drag handle is `-webkit-app-region: drag` and the
-  compositor moves the window, with `win.on("moved")` mirroring the result back
-  into `hudUserPosition`. The IPC drag path returns early on Linux, and nothing
-  re-applies bounds in response to a move, so there is no resize/position loop.
-  The HUD therefore appears where KWin decides to put it and is dragged by the
-  user rather than programmatically re-anchored. A proper fix needs a Wayland
-  layer-shell surface, which is deliberately deferred.
+  `BrowserWindow.setBounds()` x/y is silently ignored. On KDE/KWin, the
+  existing KWin bridge script now watches the uniquely titled `Recordly HUD`
+  window and assigns its `frameGeometry` to the bottom-center of the active
+  work area. The bridge starts at application startup with `--no-buttons`, so
+  the placement is active before the HUD surface appears; it is also loaded
+  again when recording starts for cursor telemetry. Popover resize remains in
+  Electron, while KWin keeps the resized window bottom-anchored.
 - **Window capture targets.** Cursor coordinates are normalized to the captured
   *monitor*. Recordly cannot read another window's geometry on Wayland, so if a
   window source is selected the point is normalized to the output the cursor is
@@ -308,13 +307,24 @@ The portal itself is perfectly capable -- KDE reports
 ```
 portal ScreenCast (cursor_mode=hidden)   sd-bus, no external deps
   -> PipeWire node
-  -> GStreamer pipewiresrc ! videoconvert ! y4menc     moves pixels only
+  -> in-process GStreamer pipeline (appsink callbacks)  moves pixels only
+       screen + system audio + microphone, one clock
+  -> timestamped raw video/PCM muxed into one Matroska pipe
   -> ffmpeg (the one Recordly already bundles)          does the encoding
   -> H.264 mp4
 ```
 
-Y4M is self-describing, so the frame size is never guessed or passed along, and
-no GStreamer encoder plugins are needed.
+The helper links GStreamer directly rather than spawning `gst-launch-1.0`,
+because every track has to share one epoch: the running time of the **first
+valid video sample**. That epoch is what the `capture-started` event carries,
+and it is what the cursor telemetry and the webcam recorder start against.
+Encoded-output readiness only *confirms* the start; it never redefines it.
+This is the same shape macOS (first video sample timestamp) and Windows WGC
+(first written frame) already use.
+
+Getting that wrong is what made webcam and cursor run ~4.3 s longer than the
+screen: readiness was measured after FFmpeg had probed and encoded, several
+seconds after pixels started flowing.
 
 ### Verifying it by hand
 
@@ -328,15 +338,27 @@ Confirm the cursor really is absent by cropping the frame at the position the
 cursor helper reports, at full resolution -- a downscaled frame is not proof, a
 cursor is only about 24 px wide.
 
+`scripts/test-wayland-capture-timing.py` does the timing half of this
+automatically. Measured on this machine, 2026-09-10, 25 s idle with system
+audio: video 25.033 s, audio 25.033 s, **32 ms** from the first-sample epoch to
+the stop boundary. The encoder confirmed readiness 553 ms after that epoch --
+which is precisely the lag that must not reach the companion clocks, and the
+reason the old file-size gate put webcam and cursor about 4.3 s out.
+
 ### Extra runtime dependency
 
-This path needs `gstreamer1` and `gstreamer1-plugin-pipewire`, which Plasma
-already pulls in. The helper probes for them *before* showing the portal dialog
+This path needs `gstreamer1`, `gstreamer1-plugins-base` and
+`gstreamer1-plugin-pipewire`, which Plasma already pulls in (the helper links
+`libgstreamer-1.0` and `libgstapp-1.0`, so the first two are load-time
+requirements, not just element lookups). Building it additionally needs
+`gstreamer1-devel` and `gstreamer1-plugins-base-devel`; without them
+`npm run build:wayland-capture` reports the missing modules and keeps the
+bundled helper instead of failing in CMake. The helper probes for them *before* showing the portal dialog
 and exits with code 7 and an actionable message if either is missing, so a
 machine without them falls back to the existing browser capture instead of
 failing mysteriously after the user has picked a screen.
 
-### Two mistakes worth not repeating
+### Three mistakes worth not repeating
 
 Both were found the hard way and both produced a recording of *something else*
 rather than an obvious failure:
@@ -351,6 +373,17 @@ rather than an obvious failure:
   file was not the screen at all. `pipewiresrc` is always given the portal's
   descriptor (`fd=`), and the daemon route has been removed rather than left as
   a fallback.
+
+- **A live source does not promise monotonic timestamps.** The engine used to
+  treat a sample arriving behind its predecessor as a broken clock and end the
+  recording. On KDE, `pipewiresrc` hands back video samples tens of
+  milliseconds early routinely, and 161 ms early was measured twenty seconds
+  into an idle capture -- a perfectly good take died with exit 6. Nothing
+  downstream needs monotonic input: video leaves as CFR frames counted off the
+  pipeline clock, audio as a PCM frame cursor, so a sample's own time only
+  decides which image is current and where PCM lands against the epoch. The
+  time is clamped to keep the queue ordered and the helper says so once per
+  track on stderr.
 
 A related trap: `dup2(fd, fd)` is a no-op that does **not** clear `FD_CLOEXEC`,
 so a descriptor that already happens to sit at the target number silently
@@ -371,20 +404,51 @@ click and is what Recordly already does today.
 
 ### Audio
 
-System audio and the microphone are captured in the same GStreamer process via
-`pulsesrc` (PipeWire's PulseAudio compatibility), carried as WAV -- self
-describing like Y4M -- and muxed into the mp4 by the same ffmpeg pass. With both
-enabled they are mixed into one track. Pass the source names with
+System audio and the microphone are captured by the same GStreamer pipeline via
+`pulsesrc` (PipeWire's PulseAudio compatibility), rebased against the same video
+epoch, and carried as timestamped PCM in the shared Matroska pipe. With both
+enabled ffmpeg mixes them into one track. Pass the source names with
 `--system-audio` (normally `<default sink>.monitor`) and `--microphone`.
 
-### Not wired into the recording UI yet
+Audio samples that predate the first video sample are dropped rather than
+shifted, so a microphone that opens early cannot push the whole timeline.
 
-The helper, its protocol, the main-process lifecycle and the IPC surface are
-complete and tested, but `useScreenRecorder.ts` still always takes the browser
-path. The remaining step is a branch alongside the existing
-`useNativeMacScreenCapture` / `useNativeWindowsCapture` ones that calls
-`evaluateWaylandCapture()` and, when it says yes, `startWaylandCapture()` /
-`stopWaylandCapture()` instead of `getDisplayMedia`.
+### How it is wired into the recording UI
+
+`useScreenRecorder.ts` branches on Linux before the browser path: it asks
+`evaluateWaylandCapture()`, and when the answer is yes it runs
+`startWaylandCaptureWithBoundary()` (`src/hooks/waylandCaptureStartup.ts`),
+which subscribes to `wayland-capture-started` *before* starting the helper.
+On that event the renderer resets the recording clock to the helper's epoch and
+starts the webcam recorder; the main process sets its own recording state with
+the same epoch, so cursor telemetry shares it. If the event never arrives, or
+the epoch changes, startup fails loudly rather than recording a mismatched set
+of tracks.
+
+Because the decision is now a user preference rather than an experiment, a
+requested cursor-free recording that cannot start surfaces an error instead of
+silently falling back to the browser path with a visible system cursor.
+
+### Testing it without a desktop
+
+The generated-source fixture runs the *production* capture engine with
+synthetic video/PCM and no portal, so it needs no permission dialog:
+
+```bash
+PKG_CONFIG_PATH=/usr/lib64/pkgconfig npm run build:wayland-capture
+python3 electron/native/wayland-capture/tests/generated_capture_test.py \
+  --fixture electron/native/wayland-capture/build/recordly-wayland-capture-fixture \
+  --artifacts /tmp/recordly-fixture
+```
+
+It covers video-only, each audio input, both, a delayed first frame,
+pause/resume, early cancellation, encoder failure, a 25 s idle screen and a
+30 s run that would fill an undrained progress pipe, and asserts decoded packet
+timestamps with ffprobe. Add `--quick` to skip the two long cases.
+
+`scripts/test-wayland-capture-timing.py` is the opt-in live counterpart: it
+opens the portal picker and needs a real monitor, so it is never part of an
+unattended run.
 
 ## Follow-up work for generic Wayland
 

@@ -6,6 +6,15 @@ import {
 } from "./waylandCaptureProtocol";
 
 describe("parseWaylandCaptureLine", () => {
+	it("preserves the native first-sample epoch and pause boundary", () => {
+		expect(parseWaylandCaptureLine(JSON.stringify({ type: "status", state: "capture-started", protocolVersion: 2, startedAtMs: 1000, timestamp: 1020, output: "/tmp/a.mp4" }))).toEqual({ type: "status", state: "capture-started", protocolVersion: 2, startedAtMs: 1000, timestamp: 1020, output: "/tmp/a.mp4" });
+		expect(parseWaylandCaptureLine(JSON.stringify({ type: "status", state: "paused", protocolVersion: 2, timestamp: 2000, mediaTimeUs: 1000000, output: "/tmp/a.mp4" }))).toMatchObject({ state: "paused", timestamp: 2000, mediaTimeUs: 1000000 });
+	});
+
+	it.each([null, -1, "1000"])("rejects an invalid first-sample epoch: %s", (startedAtMs) => {
+		expect(parseWaylandCaptureLine(JSON.stringify({ type: "status", state: "capture-started", protocolVersion: 2, startedAtMs, timestamp: 1020, output: "/tmp/a.mp4" }))).toBeNull();
+	});
+
 	it("parses the recording announcement", () => {
 		expect(
 			parseWaylandCaptureLine(

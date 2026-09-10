@@ -4,14 +4,21 @@
  *
  * The helper exists to keep the system cursor out of the frames, which the
  * portal will only do for a client that negotiates its own ScreenCast session.
- * It records the screen and its audio itself, so the only things that send a
- * recording back to the browser path are a session it does not support, a
- * source that is not a monitor, or a build without the helper.
+ * It records the screen and its audio itself. The browser path remains only
+ * for sessions where this backend is not applicable or when the user disables
+ * cursor-free capture; an applicable cursor-free failure is fatal so a visible
+ * system cursor is never recorded silently.
  */
 
 export type WaylandCaptureDecision =
 	| { use: true }
-	| { use: false; reason: WaylandCaptureSkipReason; message: string };
+	| {
+			use: false;
+			reason: WaylandCaptureSkipReason;
+			message: string;
+			/** Whether falling back would violate the requested cursor-free recording. */
+			fatal: boolean;
+	  };
 
 export type WaylandCaptureSkipReason =
 	| "not-kde-wayland"
@@ -23,7 +30,7 @@ export type WaylandCaptureSkipReason =
 export type WaylandCaptureDecisionInput = {
 	/** Resolved cursor backend; the capture path shares the KDE Wayland gate. */
 	cursorBackend: string;
-	/** Whether the user opted in. Off by default: the browser path still works. */
+	/** Whether the user enabled cursor-free capture for this recording. */
 	enabled: boolean;
 	isHelperAvailable: boolean;
 	capturesSystemAudio: boolean;
@@ -31,9 +38,8 @@ export type WaylandCaptureDecisionInput = {
 	/**
 	 * Whether the user picked a specific microphone rather than the system
 	 * default. The helper captures through PulseAudio, whose source names do not
-	 * map to the browser device ids Recordly selects with, so honouring the
-	 * choice is not possible yet and recording the wrong microphone silently
-	 * would be worse than using the browser path.
+	 * map to the browser device ids Recordly selects with. If the source cannot
+	 * be resolved, fail instead of recording the wrong microphone silently.
 	 */
 	usesNonDefaultMicrophone?: boolean;
 	/** Source id, e.g. "screen:linux-portal" or "window:123". */
@@ -46,6 +52,7 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 			use: false,
 			reason: "not-kde-wayland",
 			message: "Cursor-free capture is only available on a KDE Wayland session.",
+			fatal: false,
 		};
 	}
 
@@ -54,6 +61,7 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 			use: false,
 			reason: "disabled",
 			message: "Cursor-free capture is turned off.",
+			fatal: false,
 		};
 	}
 
@@ -62,8 +70,9 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 			use: false,
 			reason: "helper-missing",
 			message:
-				"recordly-wayland-capture is not present in this build; recording through the " +
-				"browser path, which includes the system cursor in the video.",
+				"recordly-wayland-capture is not present in this build, so the system cursor cannot " +
+				"be excluded from this recording.",
+			fatal: true,
 		};
 	}
 
@@ -72,8 +81,9 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 			use: false,
 			reason: "specific-microphone",
 			message:
-				"Cursor-free capture can only record the system default microphone, so this " +
-				"recording uses the browser path instead.",
+				"The selected microphone could not be mapped to a PulseAudio source, so the " +
+				"cursor-free recording cannot start without risking the wrong microphone.",
+			fatal: true,
 		};
 	}
 
@@ -84,6 +94,7 @@ export function decideWaylandCapture(input: WaylandCaptureDecisionInput): Waylan
 			use: false,
 			reason: "window-source",
 			message: "Cursor-free capture records a whole monitor, not a single window.",
+			fatal: true,
 		};
 	}
 

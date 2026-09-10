@@ -170,6 +170,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	hudOverlaySetSourceSelectionActive: (active: boolean) => {
 		ipcRenderer.send("hud-overlay-set-source-selection-active", active);
 	},
+	hudOverlaySetPopoverActive: (active: boolean) => {
+		ipcRenderer.send("hud-overlay-set-popover-active", active);
+	},
+	hudOverlaySetContentWidth: (width: number) => {
+		ipcRenderer.send("hud-overlay-set-content-width", width);
+	},
 	hudOverlayDrag: (phase: "start" | "move" | "end", screenX: number, screenY: number) => {
 		ipcRenderer.send("hud-overlay-drag", phase, screenX, screenY);
 	},
@@ -554,6 +560,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		microphoneLabel?: string;
 	}) => {
 		return ipcRenderer.invoke("start-wayland-capture", request);
+	},
+	onWaylandCaptureStarted: (callback: (event: { fileName: string; startedAtMs: number }) => void) => {
+		const listener = (_event: Electron.IpcRendererEvent, boundary: { fileName: string; startedAtMs: number }) => callback(boundary);
+		ipcRenderer.on("wayland-capture-started", listener);
+		return () => ipcRenderer.removeListener("wayland-capture-started", listener);
 	},
 	setWaylandCapturePaused: (paused: boolean) => {
 		return ipcRenderer.invoke("set-wayland-capture-paused", paused);
