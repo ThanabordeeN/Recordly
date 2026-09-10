@@ -175,6 +175,17 @@ export function normalizeCursorTelemetry(
 		}
 	}
 
+	// An inferred type describes only the window it was painted into. The
+	// renderer draws the most recent typed sample, and on Linux no cursor-shape
+	// monitor ever supplies a real one (see electron/ipc/cursor/monitor.ts), so
+	// without this the first inferred "text" stays an I-beam for the rest of the
+	// recording. Where mac/Windows telemetry types every sample, this never fires.
+	for (let index = 1; index < normalized.length; index += 1) {
+		if (normalized[index - 1].cursorType && !normalized[index].cursorType) {
+			normalized[index].cursorType = "arrow";
+		}
+	}
+
 	return normalized;
 }
 

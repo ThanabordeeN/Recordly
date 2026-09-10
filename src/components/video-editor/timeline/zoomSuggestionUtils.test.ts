@@ -4,6 +4,7 @@ import {
 	buildInteractionZoomSuggestions,
 	CLICK_CLUSTER_MERGE_GAP_MS,
 	CLICK_CLUSTER_PAD_MS,
+	normalizeCursorTelemetry,
 	shouldAutoApplyFreshRecordingZoomsForSource,
 } from "./zoomSuggestionUtils";
 
@@ -217,5 +218,24 @@ describe("buildInteractionZoomSuggestions (click-cluster logic)", () => {
 		const [s] = result.suggestions;
 		expect(s.start).toBeGreaterThanOrEqual(0);
 		expect(s.end).toBeLessThanOrEqual(1_000);
+	});
+});
+
+describe("inferred cursor types", () => {
+	// Linux reports no cursor shape at all, so the renderer walks back to the
+	// most recent typed sample. Without an explicit end to an inferred "text"
+	// window, that leaves the I-beam drawn for the rest of the recording.
+	it("marks the end of an inferred text window with the arrow", () => {
+		const samples: CursorTelemetryPoint[] = [];
+		for (let timeMs = 0; timeMs <= 8_000; timeMs += 100) {
+			samples.push({ timeMs, cx: 0.4, cy: 0.4, interactionType: "move" });
+		}
+		samples.push({ timeMs: 1_000, cx: 0.4, cy: 0.4, interactionType: "click" });
+		samples.sort((a, b) => a.timeMs - b.timeMs);
+
+		const normalized = normalizeCursorTelemetry(samples, 8_000);
+		const lastText = normalized.findLastIndex((sample) => sample.cursorType === "text");
+		expect(lastText).toBeGreaterThan(0);
+		expect(normalized[lastText + 1]?.cursorType).toBe("arrow");
 	});
 });
