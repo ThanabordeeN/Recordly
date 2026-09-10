@@ -12,7 +12,7 @@ import {
 	XIcon,
 } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { RxDragHandleDots2 } from "react-icons/rx";
 import { Separator } from "@/components/ui/separator";
 import { useScopedT } from "../../contexts/I18nContext";
@@ -85,6 +85,65 @@ function LaunchWindowContent() {
 	const hudContentRef = useRef<HTMLDivElement>(null);
 	const hudBarRef = useRef<HTMLDivElement>(null);
 
+	const reportHudOverlayContentWidth = useCallback(() => {
+		const contentBounds = hudContentRef.current?.getBoundingClientRect();
+		if (!contentBounds) {
+			return;
+		}
+
+		let left = contentBounds.left;
+		let right = contentBounds.right;
+		for (const element of document.querySelectorAll<HTMLElement>("[data-hud-interactive]")) {
+			const bounds = element.getBoundingClientRect();
+			left = Math.min(left, bounds.left);
+			right = Math.max(right, bounds.right);
+		}
+
+		window.electronAPI?.hudOverlaySetContentWidth?.(Math.ceil(Math.max(1, right - left + 4)));
+	}, []);
+
+	useEffect(() => {
+		let frame: number | null = null;
+		const scheduleReport = () => {
+			if (frame !== null) {
+				return;
+			}
+			frame = requestAnimationFrame(() => {
+				frame = null;
+				reportHudOverlayContentWidth();
+			});
+		};
+		const resizeObserver =
+			typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleReport);
+		if (hudContentRef.current) {
+			resizeObserver?.observe(hudContentRef.current);
+		}
+		if (hudBarRef.current) {
+			resizeObserver?.observe(hudBarRef.current);
+		}
+
+		const mutationObserver =
+			typeof MutationObserver === "undefined" ? null : new MutationObserver(scheduleReport);
+		if (hudContentRef.current) {
+			mutationObserver?.observe(hudContentRef.current, { childList: true, subtree: true });
+		}
+
+		scheduleReport();
+		return () => {
+			if (frame !== null) {
+				cancelAnimationFrame(frame);
+			}
+			resizeObserver?.disconnect();
+			mutationObserver?.disconnect();
+		};
+	}, [reportHudOverlayContentWidth]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: openId intentionally triggers a post-popover-layout measurement.
+	useEffect(() => {
+		const frame = requestAnimationFrame(reportHudOverlayContentWidth);
+		return () => cancelAnimationFrame(frame);
+	}, [openId, reportHudOverlayContentWidth]);
+
 	const {
 		selectedSource,
 		hasSelectedSource,
@@ -106,6 +165,13 @@ function LaunchWindowContent() {
 		selectedDeviceId: selectedVideoDeviceId,
 		setSelectedDeviceId: setSelectedVideoDeviceId,
 	} = useVideoDevices(webcamEnabled || openId === "webcam");
+
+	// On the non-passthrough Linux/Wayland fallback the HUD window has a bounded
+	// height, so popovers that open above the bar get clipped. Tell the main
+	// process when a popover is open so it can expand the window temporarily.
+	useEffect(() => {
+		window.electronAPI?.hudOverlaySetPopoverActive?.(openId !== null);
+	}, [openId]);
 
 	const {
 		hudOverlayMousePassthroughSupported,

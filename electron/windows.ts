@@ -31,8 +31,10 @@ let hudOverlayWindow: BrowserWindow | null = null;
 let hudOverlayHiddenFromCapture = true;
 let hudOverlayCaptureProtectionLoaded = false;
 let hudOverlayFallbackExpanded = false;
+let hudOverlayContentWidth: number | null = null;
 let hudOverlayIgnoringMouse = true;
 let hudOverlaySourceSelectionActive = false;
+let hudOverlayPopoverOpen = false;
 let hudOverlayMouseReassertTimer: NodeJS.Timeout | null = null;
 let hudOverlayRecordingActive = false;
 let hudOverlayWebcamPreviewVisible = false;
@@ -41,6 +43,7 @@ let updateToastWindow: BrowserWindow | null = null;
 let hudWasVisibleBeforeUpdateToast = false;
 
 const HUD_OVERLAY_SETTINGS_FILE = path.join(USER_DATA_PATH, "hud-overlay-settings.json");
+const HUD_OVERLAY_WINDOW_TITLE = "Recordly HUD";
 const HUD_EDGE_MARGIN_DIP = 16;
 const UPDATE_TOAST_WIDTH = 420;
 const UPDATE_TOAST_HEIGHT = 172;
@@ -211,6 +214,7 @@ function getHudOverlayBounds() {
 		workArea,
 		isHudOverlayMousePassthroughSupported(),
 		fallbackExpanded,
+		hudOverlayContentWidth ?? undefined,
 	);
 }
 
@@ -285,6 +289,7 @@ function setHudOverlayFallbackExpanded(expanded: boolean) {
 		workArea,
 		hudOverlayWindow.getBounds(),
 		expanded,
+		hudOverlayContentWidth ?? undefined,
 	);
 	hudOverlayWindow.setBounds(nextBounds, false);
 	positionUpdateToastWindow();
@@ -340,6 +345,55 @@ ipcMain.on("hud-overlay-set-source-selection-active", (_event, active: boolean) 
 	}
 
 	setHudOverlayMousePassthrough(hudOverlayIgnoringMouse);
+});
+
+ipcMain.on("hud-overlay-set-content-width", (_event, width: unknown) => {
+	if (
+		process.platform !== "linux" ||
+		isHudOverlayMousePassthroughSupported() ||
+		typeof width !== "number" ||
+		!Number.isFinite(width) ||
+		width <= 0
+	) {
+		return;
+	}
+
+	if (!hudOverlayWindow || hudOverlayWindow.isDestroyed()) {
+		return;
+	}
+
+	const nextWidth = Math.ceil(width);
+	if (hudOverlayContentWidth === nextWidth) {
+		return;
+	}
+
+	hudOverlayContentWidth = nextWidth;
+	const { workArea } = getHudOverlayDisplay();
+	const nextBounds = resizeHudOverlayFallbackBounds(
+		workArea,
+		hudOverlayWindow.getBounds(),
+		hudOverlayFallbackExpanded,
+		nextWidth,
+	);
+	hudOverlayWindow.setBounds(nextBounds, false);
+	positionUpdateToastWindow();
+	if (hudOverlayWindow.isVisible()) {
+		hudOverlayWindow.moveTop();
+	}
+});
+
+ipcMain.on("hud-overlay-set-popover-active", (_event, active: boolean) => {
+	const nextActive = Boolean(active);
+	if (hudOverlayPopoverOpen === nextActive) {
+		return;
+	}
+
+	hudOverlayPopoverOpen = nextActive;
+	// Expand/shrink the bounded fallback window while preserving the bar's
+	// current bottom edge, instead of re-centering it. On the non-passthrough
+	// Linux/Wayland path this lets a popover open above the bar without the
+	// whole HUD jumping to the bottom of the display.
+	setHudOverlayFallbackExpanded(hudOverlayPopoverOpen);
 });
 
 // Keep compatibility with existing drag IPC/state.
@@ -450,11 +504,14 @@ export function createHudOverlayWindow(): BrowserWindow {
 	const perfStart = Date.now();
 	loadHudOverlayCaptureProtectionSetting();
 	hudOverlayFallbackExpanded = false;
+	hudOverlayContentWidth = null;
 	hudOverlayWebcamPreviewVisible = false;
+	hudOverlayPopoverOpen = false;
 	const initialBounds = getHudOverlayBounds();
 	let hasShownHudWindow = false;
 
 	const win = new BrowserWindow({
+		title: HUD_OVERLAY_WINDOW_TITLE,
 		width: initialBounds.width,
 		height: initialBounds.height,
 		x: initialBounds.x,
@@ -476,6 +533,12 @@ export function createHudOverlayWindow(): BrowserWindow {
 			webSecurity: false,
 			backgroundThrottling: false,
 		},
+	});
+	// Keep the caption stable so the KWin bridge can identify this window without
+	// accidentally moving the editor or another Recordly auxiliary window.
+	win.on("page-title-updated", (event) => {
+		event.preventDefault();
+		win.setTitle(HUD_OVERLAY_WINDOW_TITLE);
 	});
 	// Keep the recording controls and webcam above normal and full-screen apps.
 	// Transparent regions remain click-through via setIgnoreMouseEvents().
@@ -587,8 +650,9 @@ export function createHudOverlayWindow(): BrowserWindow {
 
 	hudOverlayWindow = win;
 
-	// On Linux the HUD is dragged by the OS via -webkit-app-region (Wayland
-	// forbids client-side positioning). Mirror moved bounds into drag state.
+	// On Linux the OS handles HUD dragging via -webkit-app-region because
+	// Wayland forbids client-side positioning. Mirror compositor moves into
+	// state; the KWin bridge leaves interactive user moves alone.
 	if (process.platform === "linux") {
 		win.on("moved", () => {
 			if (win.isDestroyed()) return;

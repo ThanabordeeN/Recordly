@@ -45,6 +45,8 @@
 namespace {
 
 constexpr const char *kBusName = "org.recordly.WaylandCursorBridge";
+constexpr int kNameWaitMs = 3000;      // predecessor shutdown budget
+constexpr int kNameRetryStepMs = 50;
 constexpr const char *kObjectPath = "/Cursor";
 constexpr const char *kInterface = "org.recordly.WaylandCursorBridge";
 constexpr const char *kKWinPluginId = "recordly-cursor-bridge";
@@ -596,11 +598,22 @@ int main(int argc, char **argv) {
 		return 3;
 	}
 
-	// Replace a stale instance rather than queueing behind it: a helper left
-	// over from a crashed recording must never block the current one.
-	r = sd_bus_request_name(bus, kBusName, SD_BUS_NAME_REPLACE_EXISTING);
+	// Wait for a predecessor instead of replacing it. The KWin script, not this
+	// name, is the real singleton: a departing helper unloads the script *before*
+	// releasing the name (see the teardown below), so taking the name by force
+	// would load the script only to have the outgoing instance unload it again.
+	// Recordly restarts this helper to switch button capture on for a recording,
+	// so the handoff happens on every recording, not only after a crash.
+	// A crashed owner is gone from the bus already and never reaches this wait.
+	for (int waitedMs = 0;; waitedMs += kNameRetryStepMs) {
+		r = sd_bus_request_name(bus, kBusName, 0);
+		if (r >= 0 || r != -EEXIST || waitedMs >= kNameWaitMs) break;
+		usleep(kNameRetryStepMs * 1000);
+	}
 	if (r < 0) {
-		emitError(std::string("cannot own ") + kBusName + ": " + strerror(-r));
+		emitError(r == -EEXIST
+		              ? std::string("another Recordly cursor helper still owns ") + kBusName
+		              : std::string("cannot own ") + kBusName + ": " + strerror(-r));
 		sd_bus_slot_unref(slot);
 		sd_bus_flush_close_unref(bus);
 		return 3;

@@ -22,7 +22,10 @@ import {
 } from "./cursorBackendStartup";
 import { showCursor } from "./cursorHider";
 import { getGpuSwitches } from "./gpuSwitches";
-import { stopWaylandCursorBackend } from "./ipc/cursor/waylandKde";
+import {
+	startWaylandCursorBackend,
+	stopWaylandCursorBackend,
+} from "./ipc/cursor/waylandKde";
 import {
 	cleanupAllExportStreams,
 	cleanupNativeVideoExportSessions,
@@ -893,6 +896,13 @@ function initializeCursorTelemetryBackend() {
 	}
 
 	setCursorBackend(resolution.backend);
+
+	// Native Wayland does not allow Electron to place top-level windows. The
+	// KDE/KWin bridge also owns HUD placement, but it must be loaded before the
+	// HUD window is created so KWin can position it when the surface appears.
+	if (resolution.backend === "linux-kde-wayland") {
+		startWaylandCursorBackend({ enableButtons: false });
+	}
 }
 
 // On macOS, applications and their menu bar stay active until the user quits

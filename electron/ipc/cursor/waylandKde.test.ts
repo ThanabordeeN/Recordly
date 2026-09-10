@@ -232,6 +232,24 @@ describe("startWaylandCursorBackend / stopWaylandCursorBackend", () => {
 		expect(waylandCursorHelperProcess).toBe(helper);
 	});
 
+	it("can start the KWin bridge without opening input devices for HUD placement", () => {
+		const helper = createFakeHelper();
+		const spawnHelper = vi.fn(() => helper);
+
+		startWaylandCursorBackend({
+			spawnHelper,
+			enableButtons: false,
+			log: () => {},
+			warn: () => {},
+		});
+
+		expect(spawnHelper).toHaveBeenCalledWith("/opt/recordly-wayland-cursor", [
+			"--kwin-script",
+			"/tmp/app/kwin/recordly-cursor-bridge.js",
+			"--no-buttons",
+		]);
+	});
+
 	it("feeds stdout through the parser into cursor state", () => {
 		const helper = createFakeHelper();
 		startWaylandCursorBackend({

@@ -17,12 +17,13 @@ export function getHudOverlayWindowBounds(
 	workArea: HudOverlayWorkArea,
 	mousePassthroughSupported: boolean,
 	fallbackExpanded = false,
+	fallbackWidth = NON_PASSTHROUGH_HUD_WIDTH_DIP,
 ): HudOverlayWorkArea {
 	if (mousePassthroughSupported) {
 		return { ...workArea };
 	}
 
-	const width = Math.min(workArea.width, NON_PASSTHROUGH_HUD_WIDTH_DIP);
+	const width = Math.min(workArea.width, Math.max(1, fallbackWidth));
 	const height = Math.min(
 		workArea.height,
 		fallbackExpanded
@@ -54,14 +55,23 @@ export function resizeHudOverlayFallbackBounds(
 	workArea: HudOverlayWorkArea,
 	currentBounds: HudOverlayWorkArea,
 	fallbackExpanded: boolean,
+	fallbackWidth = NON_PASSTHROUGH_HUD_WIDTH_DIP,
 ): HudOverlayWorkArea {
-	const nextBounds = getHudOverlayWindowBounds(workArea, false, fallbackExpanded);
+	const nextBounds = getHudOverlayWindowBounds(
+		workArea,
+		false,
+		fallbackExpanded,
+		fallbackWidth,
+	);
 	const maxX = workArea.x + workArea.width - nextBounds.width;
 	const maxY = workArea.y + workArea.height - nextBounds.height;
 
 	return {
 		...nextBounds,
-		x: clamp(currentBounds.x, workArea.x, maxX),
+		x:
+			fallbackWidth === NON_PASSTHROUGH_HUD_WIDTH_DIP
+				? clamp(currentBounds.x, workArea.x, maxX)
+				: nextBounds.x,
 		y: clamp(currentBounds.y + currentBounds.height - nextBounds.height, workArea.y, maxY),
 	};
 }

@@ -24,10 +24,10 @@ import {
 /**
  * Runtime for the `linux-kde-wayland` cursor backend.
  *
- * Owns the lifetime of the `recordly-wayland-cursor` helper: one long-running
- * process per recording, started when cursor capture begins and torn down when
- * it ends.  The helper loads/unloads the KWin bridge script itself, so stopping
- * it also removes Recordly's script from the compositor.
+ * Owns the lifetime of the `recordly-wayland-cursor` helper. The helper can be
+ * started at application startup in placement-only mode (without opening input
+ * devices), then restarted with button capture when recording begins. It loads
+ * and unloads the KWin bridge script itself.
  */
 
 export const WAYLAND_HELPER_EXIT_CODES: Record<number, string> = {
@@ -175,6 +175,7 @@ export function stopWaylandCursorBackend() {
 
 export function startWaylandCursorBackend(options?: {
 	spawnHelper?: (helperPath: string, args: string[]) => ChildProcessWithoutNullStreams | null;
+	enableButtons?: boolean;
 	log?: (message: string) => void;
 	warn?: (message: string) => void;
 }): boolean {
@@ -193,6 +194,9 @@ export function startWaylandCursorBackend(options?: {
 	}
 
 	const args = ["--kwin-script", getWaylandCursorKWinScriptPath()];
+	if (options?.enableButtons === false) {
+		args.push("--no-buttons");
+	}
 
 	let helper: ChildProcessWithoutNullStreams | null = null;
 	try {

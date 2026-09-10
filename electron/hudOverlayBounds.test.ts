@@ -143,6 +143,27 @@ describe("resizeHudOverlayFallbackBounds", () => {
 			height: 540,
 		});
 	});
+
+	it("uses the measured content width while preserving the bottom edge", () => {
+		expect(
+			resizeHudOverlayFallbackBounds(
+				workArea,
+				{
+					x: 530,
+					y: 920,
+					width: 860,
+					height: 160,
+				},
+				false,
+				520,
+			),
+		).toEqual({
+			x: 700,
+			y: 920,
+			width: 520,
+			height: 160,
+		});
+	});
 });
 
 describe("shouldExpandHudOverlayFallback", () => {
