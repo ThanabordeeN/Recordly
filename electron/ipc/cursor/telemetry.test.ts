@@ -29,7 +29,14 @@ vi.mock("../utils", () => ({
 	})),
 }));
 
-import { activeCursorSamples, setActiveCursorSamples, setCursorCaptureStartTimeMs } from "../state";
+import {
+	activeCursorSamples,
+	setActiveCursorSamples,
+	setCursorBackend,
+	setCursorCaptureStartTimeMs,
+	setLatestWaylandCursorPoint,
+	setWaylandOutputs,
+} from "../state";
 import {
 	getCursorCaptureElapsedMs,
 	normalizeCursorTelemetrySamples,
@@ -38,6 +45,7 @@ import {
 	pushCursorSample,
 	resetCursorCaptureClock,
 	resumeCursorCapture,
+	sampleCursorPoint,
 	writeCursorTelemetry,
 } from "./telemetry";
 
@@ -118,5 +126,30 @@ describe("cursor telemetry pause clock", () => {
 
 		expect(rm).toHaveBeenCalledWith("/tmp/recording.cursor.json", { force: true });
 		expect(writeFile).not.toHaveBeenCalled();
+	});
+});
+
+describe("KDE Wayland cursor sampling", () => {
+	beforeEach(() => {
+		setActiveCursorSamples([]);
+		setCursorCaptureStartTimeMs(Date.now());
+		setLatestWaylandCursorPoint(null);
+		setWaylandOutputs([{ name: "DP-1", x: 0, y: 0, width: 1920, height: 1080, scale: 1 }]);
+		setCursorBackend("linux-kde-wayland");
+	});
+
+	// KWin needs ~200 ms to report a position while the bridge helper is handed
+	// over. Recording the screen-centre placeholder pinned the drawn cursor to
+	// the middle of the screen at the start of every recording.
+	it("records nothing until KWin reports a real position", () => {
+		sampleCursorPoint();
+		sampleCursorPoint();
+		expect(activeCursorSamples).toHaveLength(0);
+
+		// Off-centre on purpose: the placeholder this replaces is (0.5, 0.5).
+		setLatestWaylandCursorPoint({ x: 480, y: 270, updatedAt: Date.now() });
+		sampleCursorPoint();
+		expect(activeCursorSamples).toHaveLength(1);
+		expect(activeCursorSamples[0].cx).toBeCloseTo(0.25, 5);
 	});
 });

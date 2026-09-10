@@ -312,6 +312,15 @@ export function pushCursorSample(
 }
 
 export function sampleCursorPoint() {
+	// On KDE Wayland the position is a screen-centre placeholder until KWin
+	// reports one, which takes ~200 ms while the bridge helper is handed over.
+	// Recording those samples pins the drawn cursor to the middle of the screen
+	// for the first frames of every video, then jumps. Skipping them makes the
+	// first sample the first real position instead.
+	if (cursorBackend === "linux-kde-wayland" && !getNormalizedWaylandCursorPoint()) {
+		return;
+	}
+
 	const point = getNormalizedCursorPoint();
 	pushCursorSample(point.cx, point.cy, getCursorCaptureElapsedMs(), "move");
 }

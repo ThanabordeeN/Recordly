@@ -561,8 +561,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	}) => {
 		return ipcRenderer.invoke("start-wayland-capture", request);
 	},
-	onWaylandCaptureStarted: (callback: (event: { fileName: string; startedAtMs: number }) => void) => {
-		const listener = (_event: Electron.IpcRendererEvent, boundary: { fileName: string; startedAtMs: number }) => callback(boundary);
+	onWaylandCaptureStarted: (
+		callback: (event: { fileName: string; startedAtMs: number }) => void,
+	) => {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			boundary: { fileName: string; startedAtMs: number },
+		) => callback(boundary);
 		ipcRenderer.on("wayland-capture-started", listener);
 		return () => ipcRenderer.removeListener("wayland-capture-started", listener);
 	},
@@ -642,6 +647,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		) => callback(payload);
 		ipcRenderer.on("recording-state-changed", listener);
 		return () => ipcRenderer.removeListener("recording-state-changed", listener);
+	},
+	onRecordingNotice: (
+		callback: (notice: { level: "warning" | "error"; message: string }) => void,
+	) => {
+		const listener = (
+			_event: Electron.IpcRendererEvent,
+			notice: { level: "warning" | "error"; message: string },
+		) => callback(notice);
+		ipcRenderer.on("recording-notice", listener);
+		return () => ipcRenderer.removeListener("recording-notice", listener);
 	},
 	onRecordingInterrupted: (callback: (state: { reason: string; message: string }) => void) => {
 		const listener = (

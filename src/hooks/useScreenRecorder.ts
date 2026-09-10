@@ -441,6 +441,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const requestedBrowserMicrophoneProfile = useRef<string | null>(null);
 	const hideEditorOverlayCursorByDefault = useRef(false);
 
+	/** Cursor-free capture is unavailable: record anyway, but do not let the
+	 *  user discover the burned-in system cursor only when they watch it back. */
+	const reportCursorFreeFallback = useCallback((message: string) => {
+		console.warn(`[WaylandCapture] falling back to the browser path: ${message}`);
+		toast.warning(
+			`${message} Recording will continue with the system cursor visible in the video.`,
+			{ duration: 12000 },
+		);
+	}, []);
+
 	const notifyRecordingFinalizationFailure = useCallback(async (message: string) => {
 		setFinalizing(false);
 		toast.error(message, { duration: 10000 });
@@ -1621,6 +1631,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			},
 		);
 
+		const removeRecordingNoticeListener = window.electronAPI?.onRecordingNotice?.((notice) => {
+			toast[notice.level === "error" ? "error" : "warning"](notice.message, {
+				duration: 12000,
+			});
+		});
+
 		const removeRecordingInterruptedListener = window.electronAPI?.onRecordingInterrupted?.(
 			(state) => {
 				void (async () => {
@@ -1662,6 +1678,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			recordingStartGeneration.current += 1;
 			cleanup?.();
 			removeRecordingStateListener?.();
+			removeRecordingNoticeListener?.();
 			removeRecordingInterruptedListener?.();
 
 			if (nativeScreenRecording.current) {
@@ -1782,19 +1799,26 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							const fileName = `${RECORDING_FILE_PREFIX}${timestamp}.mp4`;
 							started = await startWaylandCaptureWithBoundary({
 								fileName,
-								subscribe: (callback) => window.electronAPI.onWaylandCaptureStarted(callback),
+								subscribe: (callback) =>
+									window.electronAPI.onWaylandCaptureStarted(callback),
 								cancelled: startWasCancelled,
 								onStarted: (epoch) => {
 									waylandCaptureRecording.current = true;
 									resetRecordingClock(epoch);
 									beginWebcamCapture();
-									webcamTimeOffsetMs.current = webcamStartTime.current === null ? 0 : webcamStartTime.current - epoch;
+									webcamTimeOffsetMs.current =
+										webcamStartTime.current === null
+											? 0
+											: webcamStartTime.current - epoch;
 								},
-								start: () => window.electronAPI.startWaylandCapture({
-									fileName, frameRate: TARGET_FRAME_RATE,
-									capturesSystemAudio: systemAudioEnabled,
-									capturesMicrophone: microphoneEnabled, microphoneLabel: micLabel,
-								}),
+								start: () =>
+									window.electronAPI.startWaylandCapture({
+										fileName,
+										frameRate: TARGET_FRAME_RATE,
+										capturesSystemAudio: systemAudioEnabled,
+										capturesMicrophone: microphoneEnabled,
+										microphoneLabel: micLabel,
+									}),
 							});
 						} finally {
 							setFinalizing(false);
@@ -1821,20 +1845,31 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 							return;
 						}
 
-						throw new Error(`Cursor-free capture could not start: ${started.message}`);
-					}
-
-					if (decision.fatal) {
-						throw new Error(decision.message);
-					}
-
-					console.log(`[WaylandCapture] ${decision.message}`);
-				} catch (error) {
-					throw error instanceof Error
-						? error
-						: new Error(
-								`Could not evaluate cursor-free capture: ${getErrorMessage(error)}`,
+						// The companion clocks were never started, so the browser path
+						// can still take this recording. Say what changes before it
+						// does: that capture cannot exclude the system cursor.
+						if (waylandCaptureRecording.current) {
+							throw new Error(
+								`Cursor-free capture could not start: ${started.message}`,
 							);
+						}
+						reportCursorFreeFallback(
+							started.message ?? "Cursor-free capture could not start.",
+						);
+					} else if (decision.fatal) {
+						reportCursorFreeFallback(decision.message);
+					} else {
+						console.log(`[WaylandCapture] ${decision.message}`);
+					}
+				} catch (error) {
+					if (waylandCaptureRecording.current) {
+						throw error instanceof Error
+							? error
+							: new Error(
+									`Could not evaluate cursor-free capture: ${getErrorMessage(error)}`,
+								);
+					}
+					reportCursorFreeFallback(getErrorMessage(error));
 				}
 			}
 

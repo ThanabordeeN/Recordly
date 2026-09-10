@@ -5,7 +5,23 @@ const { helperPath } = vi.hoisted(() => ({
 	helperPath: { value: "/opt/recordly-wayland-cursor" },
 }));
 
+const { sentNotices } = vi.hoisted(() => ({
+	sentNotices: [] as { level: string; message: string }[],
+}));
+
 vi.mock("electron", () => ({
+	BrowserWindow: {
+		getAllWindows: () => [
+			{
+				isDestroyed: () => false,
+				webContents: {
+					send: (_channel: string, notice: { level: string; message: string }) => {
+						sentNotices.push(notice);
+					},
+				},
+			},
+		],
+	},
 	app: {
 		getPath: vi.fn(() => "/tmp"),
 		getAppPath: vi.fn(() => "/tmp/app"),
@@ -150,6 +166,7 @@ describe("applyWaylandHelperEvent", () => {
 
 	it("reports an actionable message when /dev/input is not readable", () => {
 		const warn = vi.fn();
+		sentNotices.length = 0;
 
 		applyWaylandHelperEvent(
 			{
@@ -166,6 +183,11 @@ describe("applyWaylandHelperEvent", () => {
 			"[CursorTelemetry] Mouse button capture unavailable: permission denied for /dev/input/event4",
 		);
 		expect(message).toContain("Auto Zoom click detection will be unavailable");
+
+		// A console warning alone leaves the user thinking Auto Zoom is broken.
+		expect(sentNotices).toHaveLength(1);
+		expect(sentNotices[0].level).toBe("warning");
+		expect(sentNotices[0].message).toContain("'input' group");
 	});
 
 	it("explains a missing libinput without blaming permissions", () => {

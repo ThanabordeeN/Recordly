@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { getWaylandCursorHelperPath, getWaylandCursorKWinScriptPath } from "../paths/binaries";
+import { emitRecordingNotice } from "../recording/events";
 import {
 	cursorBackend,
 	isCursorCaptureActive,
@@ -111,6 +112,17 @@ export function applyWaylandHelperEvent(
 				hasLoggedButtonCaptureWarning = true;
 				const reason = String(event.detail.reason ?? "no-pointer-device");
 				const path = String(event.detail.path ?? "/dev/input/event*");
+				// The console line below is for us; the user needs to be told too,
+				// or Auto Zoom simply appears not to work.
+				emitRecordingNotice(
+					"warning",
+					reason === "permission-denied"
+						? "Mouse clicks cannot be detected: Recordly has no permission to read " +
+								"input devices, so Auto Zoom will not add click zooms. Add your user to " +
+								"the 'input' group and log back in. Cursor movement is still recorded."
+						: "Mouse clicks cannot be detected on this system, so Auto Zoom will not add " +
+								"click zooms. Cursor movement is still recorded.",
+				);
 				const suffix =
 					"Auto Zoom click detection will be unavailable; cursor movement telemetry still works.";
 				warn(

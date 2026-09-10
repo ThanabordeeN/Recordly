@@ -222,8 +222,16 @@ export function startWaylandCapture(options: {
 
 		helper.stderr?.on("data", (chunk: Buffer) => {
 			const message = chunk.toString().trim();
-			if (message) {
-				warn(`[WaylandCapture] helper: ${message}`);
+			if (!message) return;
+			warn(`[WaylandCapture] helper: ${message}`);
+			// The helper links GStreamer, so a machine without those libraries
+			// cannot even start it: the loader kills it before its own dependency
+			// check can report anything. Name the cause instead of an exit code.
+			if (message.includes("error while loading shared libraries")) {
+				lastError =
+					"The cursor-free capture helper could not start because GStreamer is missing " +
+					"on this system (install gstreamer1 and gstreamer1-plugins-base, or the " +
+					"equivalent for your distribution).";
 			}
 		});
 

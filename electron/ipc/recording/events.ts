@@ -7,3 +7,16 @@ export function emitRecordingInterrupted(reason: string, message: string) {
 		}
 	});
 }
+
+/**
+ * A recording-related problem the user has to know about but which does not end
+ * the recording: a degraded feature, or a fallback that changes what is
+ * captured. Unlike emitRecordingInterrupted() the renderer only shows this.
+ */
+export function emitRecordingNotice(level: "warning" | "error", message: string) {
+	BrowserWindow.getAllWindows().forEach((window) => {
+		if (!window.isDestroyed()) {
+			window.webContents.send("recording-notice", { level, message });
+		}
+	});
+}

@@ -590,6 +590,9 @@ interface Window {
 		onRecordingSessionChanged: (
 			callback: (session: RendererRecordingSessionData | null) => void,
 		) => () => void;
+		onRecordingNotice: (
+			callback: (notice: { level: "warning" | "error"; message: string }) => void,
+		) => () => void;
 		onRecordingInterrupted: (
 			callback: (state: { reason: string; message: string }) => void,
 		) => () => void;
