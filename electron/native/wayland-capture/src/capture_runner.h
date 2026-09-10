@@ -10,7 +10,6 @@
 struct CaptureConfig {
   std::string outputPath;
   std::string ffmpegPath = "ffmpeg";
-  std::string vaapiDevice;
   int fps = 60;
   unsigned audioTracks = 0;
   // Portal metadata for the `recording` event. The fixture leaves these zero.

@@ -172,13 +172,8 @@ std::vector<std::string> buildFfmpegArgs(const CaptureConfig &config) {
 
   args.insert(args.end(), {"-r", std::to_string(config.fps), "-fps_mode", "cfr"});
 
-  if (!config.vaapiDevice.empty()) {
-    args.insert(args.end(), {"-vaapi_device", config.vaapiDevice, "-vf",
-                             "format=nv12,hwupload", "-c:v", "h264_vaapi", "-qp", "24"});
-  } else {
-    args.insert(args.end(),
-                {"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"});
-  }
+  args.insert(args.end(),
+              {"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"});
 
   if (config.audioTracks > 0) args.insert(args.end(), {"-c:a", "aac", "-b:a", "192k"});
 

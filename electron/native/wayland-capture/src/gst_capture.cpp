@@ -9,7 +9,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <cstdio>
 #include <deque>
 #include <fcntl.h>
 #include <mutex>
@@ -31,8 +30,7 @@ using Sample = std::shared_ptr<GstSample>;
 
 struct Pending {
   Sample sample;
-  int64_t time;     // segment running-time nanoseconds
-  int64_t epochMs;  // wall-clock estimate of this sample's capture time
+  int64_t time;  // segment running-time nanoseconds
   size_t bytes;
 };
 
@@ -79,7 +77,6 @@ struct CaptureEngine::Impl {
     std::deque<Pending> queue;
     size_t bytes = 0;
     int64_t lastTime = -1;
-    bool warnedBackwards = false;
     GstCaps *caps = nullptr;
     GstElement *sink = nullptr;
     GstElement *src = nullptr;
@@ -193,32 +190,15 @@ struct CaptureEngine::Impl {
       if (base > now || static_cast<guint64>(time) > now - base + kSecond)
         throw std::runtime_error("sample clock is ahead of acquisition clock");
 
-      // Wall time is only an IPC bridge; every media decision stays native.
-      // (now - base) is the current running time, so subtracting the sample's
-      // running time recovers how long ago it was captured.
-      const int64_t epochMs =
-          wallMs() - (static_cast<int64_t>(now - base) - time) / GST_MSECOND;
-
       std::lock_guard<std::mutex> lock(self.mutex);
       if (!self.accepting) return GST_FLOW_OK;
-      // A live source does not promise monotonic timestamps: on KDE,
-      // pipewiresrc handed back a video sample 161 ms behind its predecessor
-      // twenty seconds into an idle capture, and failing here ended a recording
-      // that was otherwise perfectly fine. Nothing downstream needs the source
-      // to be monotonic -- video leaves as CFR frames counted off the pipeline
-      // clock and audio as a PCM frame cursor, so a sample's own time only
-      // decides which image is current and where PCM lands against the epoch.
-      // Keep the queue ordered, which every consumer does assume, and say so
-      // once per track rather than discarding the take.
-      if (track.lastTime > time) {
-        if (!track.warnedBackwards) {
-          track.warnedBackwards = true;
-          fprintf(stderr, "[wayland-capture] track %u handed back a sample %lld ms early; "
-                          "clamping to keep the queue ordered\n",
-                  track.index, static_cast<long long>((track.lastTime - time) / GST_MSECOND));
-        }
-        time = track.lastTime;
-      }
+      // A live source does not promise monotonic timestamps -- pipewiresrc came
+      // back 161 ms early on KDE -- and nothing downstream needs it to: video
+      // leaves as CFR frames counted off the pipeline clock, audio as a PCM
+      // frame cursor. Keep only the queue order every consumer does assume.
+      // ponytail: clamped silently, so a source that always runs backwards
+      // freezes the image with no trace; log the step here if that needs it.
+      if (track.lastTime > time) time = track.lastTime;
       if (track.caps && !gst_caps_is_equal(track.caps, caps))
         throw std::runtime_error("capture caps changed during recording");
       if (!track.caps) track.caps = gst_caps_ref(caps);
@@ -239,7 +219,7 @@ struct CaptureEngine::Impl {
           throw std::runtime_error("audio queue overflow or invalid PCM buffer");
       }
       track.bytes += size;
-      track.queue.push_back({std::move(sample), time, epochMs, size});
+      track.queue.push_back({std::move(sample), time, size});
       return GST_FLOW_OK;
     } catch (const std::exception &e) {
       self.fail(e.what());
@@ -443,7 +423,11 @@ struct CaptureEngine::Impl {
           if (tracks[0].queue.empty()) return;
           const Pending &item = tracks[0].queue.front();
           timeline.anchor(item.time);
-          epoch = item.epochMs;
+          // Wall time is only an IPC bridge; every media decision stays native.
+          // Subtracting the sample's running time from the current one recovers
+          // how long ago it was captured, so this is as accurate here as it
+          // would be in the callback.
+          epoch = wallMs() - (runningNow() - item.time) / GST_MSECOND;
           first = item.sample;
         }
         createTransport(gst_sample_get_caps(first.get()));

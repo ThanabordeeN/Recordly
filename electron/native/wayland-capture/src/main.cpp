@@ -93,14 +93,15 @@ GstElement *parseOrThrow(const std::string &description) {
   return element;
 }
 
-GstElement *buildPortalAcquisition(const PortalSession &session, int frameRate,
-                                   int frameKeepaliveMs, const std::string &systemAudio,
+GstElement *buildPortalAcquisition(const PortalSession &session,
+                                   const std::string &systemAudio,
                                    const std::string &microphone) {
   std::string description =
       "pipewiresrc fd=" + std::to_string(session.pipewireFd) +
       " path=" + std::to_string(session.nodeId) +
-      " do-timestamp=true keepalive-time=" + std::to_string(frameKeepaliveMs) +
-      " provide-clock=false ! video/x-raw,framerate=0/1 ! videoconvert ! "
+      // No keepalive resend: an idle screen sends no frames, and the engine
+      // renders the last image at every CFR boundary anyway.
+      " do-timestamp=true provide-clock=false ! video/x-raw,framerate=0/1 ! videoconvert ! "
       "video/x-raw,format=I420 ! appsink name=video ";
 
   unsigned audioIndex = 0;
@@ -152,8 +153,6 @@ int main(int argc, char **argv) {
       config.outputPath = argv[++i];
     } else if (flag == "--ffmpeg" && hasValue) {
       config.ffmpegPath = argv[++i];
-    } else if (flag == "--vaapi-device" && hasValue) {
-      config.vaapiDevice = argv[++i];
     } else if (flag == "--system-audio" && hasValue) {
       systemAudioDevice = argv[++i];
     } else if (flag == "--microphone" && hasValue) {
@@ -208,9 +207,8 @@ int main(int argc, char **argv) {
                       : cursorMode == PortalCursorMode::Embedded ? "embedded"
                                                                   : "metadata";
 
-  const int frameKeepaliveMs = 1000 / config.fps;
   AcquisitionFactory factory = [&](const CaptureConfig &) -> GstElement * {
-    return buildPortalAcquisition(session, config.fps, frameKeepaliveMs, systemAudioDevice,
+    return buildPortalAcquisition(session, systemAudioDevice,
                                   microphoneDevice);
   };
 

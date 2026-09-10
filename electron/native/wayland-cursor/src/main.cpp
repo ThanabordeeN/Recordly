@@ -45,8 +45,6 @@
 namespace {
 
 constexpr const char *kBusName = "org.recordly.WaylandCursorBridge";
-constexpr int kNameWaitMs = 3000;      // predecessor shutdown budget
-constexpr int kNameRetryStepMs = 50;
 constexpr const char *kObjectPath = "/Cursor";
 constexpr const char *kInterface = "org.recordly.WaylandCursorBridge";
 constexpr const char *kKWinPluginId = "recordly-cursor-bridge";
@@ -605,10 +603,10 @@ int main(int argc, char **argv) {
 	// Recordly restarts this helper to switch button capture on for a recording,
 	// so the handoff happens on every recording, not only after a crash.
 	// A crashed owner is gone from the bus already and never reaches this wait.
-	for (int waitedMs = 0;; waitedMs += kNameRetryStepMs) {
+	for (int waitedMs = 0;; waitedMs += 50) {  // 3 s predecessor shutdown budget
 		r = sd_bus_request_name(bus, kBusName, 0);
-		if (r >= 0 || r != -EEXIST || waitedMs >= kNameWaitMs) break;
-		usleep(kNameRetryStepMs * 1000);
+		if (r >= 0 || r != -EEXIST || waitedMs >= 3000) break;
+		usleep(50 * 1000);
 	}
 	if (r < 0) {
 		emitError(r == -EEXIST

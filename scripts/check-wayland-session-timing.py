@@ -32,7 +32,6 @@ def duration(path):
 
 if args.session:
     video = args.session
-    manifest_path = video.with_suffix('')
     manifest_path = video.parent / (video.stem + MANIFEST)
 else:
     manifests = sorted(args.recordings.glob('*' + MANIFEST), key=lambda p: p.stat().st_mtime)
